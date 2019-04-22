@@ -1,0 +1,13 @@
+LICENSE.rst
+README.rst
+__version__.py
+setup.cfg
+setup.py
+idm/__init__.py
+idm/idm.py
+idm.egg-info/PKG-INFO
+idm.egg-info/SOURCES.txt
+idm.egg-info/dependency_links.txt
+idm.egg-info/entry_points.txt
+idm.egg-info/requires.txt
+idm.egg-info/top_level.txt

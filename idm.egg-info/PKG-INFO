@@ -1,0 +1,78 @@
+Metadata-Version: 1.2
+Name: idm
+Version: 0.26
+Summary: Downloader with Internet Download Manager (Windows)
+Home-page: https://bitbucket.org/licface/idm
+Author: cumulus13 Team
+Author-email: cumulus13@gmail.com
+License: BSD
+Description-Content-Type: UNKNOWN
+Description: idm
+        ==================
+        
+        Downloader with Internet Download Manager (Windows)
+        
+        
+        Installing
+        ----------
+        
+        Install and update using `pip`_:
+        
+        .. code-block:: text
+        
+            $ pip install idm
+        
+        idm supports Python 2 and newer, Python 3 and newer, and PyPy.
+        
+        .. _pip: https://pip.pypa.io/en/stable/quickstart/
+        
+        
+        Example
+        ----------------
+        
+        What does it look like? Here is an example of a simple idm program:
+        
+        .. code-block:: python
+        
+            from idm import IDMan
+            
+            downloader = IDMan()
+            url = "http://test.com/test.exe"
+            
+            downloader.download(url, r"c:\DOWNLOADS", output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm = False, lflag = None, clip=False)
+        
+        
+        And will open "Internet Download Manager (IDM)"
+        
+        or run on terminal 
+        
+        .. code-block:: batch
+        
+            $ python idm.py "http://test.com/test.exe" -p C:\DOWNLOADS -o test_output.exe 
+        
+        Support
+        ------
+        
+        *   Python 2.7 +, Python 3.x
+        *   Windows (only), for Linux you cant use wget (pip install wget)
+        
+        Links
+        -----
+        
+        *   License: `BSD <https://bitbucket.org/licface/idm/src/default/LICENSE.rst>`_
+        *   Code: https://bitbucket.org/licface/idm
+        *   Issue tracker: https://bitbucket.org/licface/idm/issues
+Platform: UNKNOWN
+Classifier: Development Status :: 5 - Production/Stable
+Classifier: Intended Audience :: Developers
+Classifier: License :: OSI Approved :: BSD License
+Classifier: Operating System :: OS Independent
+Classifier: Programming Language :: Python
+Classifier: Programming Language :: Python :: 2
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.4
+Classifier: Programming Language :: Python :: 3.5
+Classifier: Programming Language :: Python :: 3.6
+Classifier: Programming Language :: Python :: 3.7
+Requires-Python: >=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*
