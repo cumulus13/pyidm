@@ -4,6 +4,7 @@ __version__.py
 setup.cfg
 setup.py
 idm/__init__.py
+idm/__main__.py
 idm/idm.py
 idm.egg-info/PKG-INFO
 idm.egg-info/SOURCES.txt

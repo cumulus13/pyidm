@@ -28,11 +28,12 @@ setup(
     packages=["idm"],
     install_requires=[
         'argparse',
-        'pypiwin32'
+        'pypiwin32',
+        'comtypes'
     ],
     entry_points = {
          "console_scripts": [
-             "idm = idm.idm.py",
+             "idm = idm.__main__:usage",
          ]
     },
     data_files=['__version__.py', 'README.rst', 'LICENSE.rst'],
