@@ -1,8 +1,11 @@
 import sys
-import comtypes.client as cc
-import comtypes
-import argparse
-import os
+if not 'linux' in sys.platform:
+	import comtypes.client as cc
+else:
+
+	import comtypes
+	import argparse
+	import os
 
 class IDMan(object):
     def __init__(self):

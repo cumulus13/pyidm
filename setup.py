@@ -4,10 +4,10 @@ from setuptools import setup
 
 import os
 import shutil
-try:
-    os.remove(os.path.join('idm', '__version__.py'))
-except:
-    pass
+#try:
+#    os.remove(os.path.join('idm', '__version__.py'))
+#except:
+#    pass
 shutil.copy2('__version__.py', 'idm')
 
 with io.open("README.rst", "rt", encoding="utf8") as f:
@@ -33,6 +33,7 @@ setup(
     maintainer_email="cumulus13@gmail.com",
     description="Downloader with Internet Download Manager (Windows)",
     long_description=readme,
+    long_description_content_type="text/markdown",
     packages=["idm"],
     install_requires=[
         'argparse',
