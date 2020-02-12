@@ -1,11 +1,12 @@
 import sys
 if not 'linux' in sys.platform:
-	import comtypes.client as cc
+    import comtypes.client as cc
 else:
-
-	import comtypes
-	import argparse
-	import os
+    import comtypes
+    import argparse
+    import os
+if sys.version_info.major == 2:
+    input = raw_input
 
 class IDMan(object):
     def __init__(self):
@@ -14,15 +15,15 @@ class IDMan(object):
         if not self.tlb:
             self.tlb = r'c:\Program Files\Internet Download Manager (x86)\idmantypeinfo.tlb'
         if not self.tlb:
-            print "It seem IDM not installer, please install first !"
+            print("It seem IDM not installer, please install first !")
             sys.exit("It seem IDM not installer, please install first !")
 
     def get_from_clipboard(self):
         try:
             import clipboard
         except ImportError:
-            print "Module Clipboard not Installer yet, please install first"
-            q = raw_input("Please re-input url download to:")
+            print("Module Clipboard not Installer yet, please install first")
+            q = input("Please re-input url download to:")
             if not q:
                 sys.exit("You not input URL Download !")
             else:
@@ -55,7 +56,7 @@ class IDMan(object):
         if path_to_save:
             os.path.realpath(path_to_save)
         idman1.SendLinkToIDM(link, referrer, cookie, postData, user, password, path_to_save, output, lflag)
-    
+
     def usage(self):
         parse = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
         parse.add_argument('URL', action='store', help='url to download')
@@ -68,7 +69,7 @@ class IDMan(object):
         else:
             args = parse.parse_args()
             self.download(args.URL, args.path, args.output, confirm=args.confirm, clip=args.clip)
-        
+
 
 if __name__ == '__main__':
     c = IDMan()
