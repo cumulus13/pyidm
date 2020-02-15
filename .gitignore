@@ -8,4 +8,5 @@
 *.hgignore
 *.hgtags
 dist/
+build/
 *.egg-info/
