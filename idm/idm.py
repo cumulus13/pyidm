@@ -1,10 +1,10 @@
 import sys
+import os
 if not 'linux' in sys.platform:
     import comtypes.client as cc
 else:
     import comtypes
-    import argparse
-    import os
+import argparse
 if sys.version_info.major == 2:
     input = raw_input
 
