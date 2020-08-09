@@ -45,7 +45,7 @@ Support
 ------
 
 *   Python 2.7 +, Python 3.x
-*   Windows (only), for Linux you cant use wget (pip install wget)
+*   Windows (only), for Linux you cant use wget (pip install pywget)
 
 Links
 -----
