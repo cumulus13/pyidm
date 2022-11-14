@@ -43,6 +43,7 @@ setup(
     entry_points = {
          "console_scripts": [
              "idm = idm.__main__:usage",
+             "pyidm = idm.__main__:usage",
          ]
     },
     data_files=['__version__.py', 'README.rst', 'LICENSE.rst'],
