@@ -33,10 +33,10 @@ setup(
     version=version,
     url="https://bitbucket.org/licface/idm",
     project_urls={
-        "Documentation": "https://bitbucket.org/licface/idm",
-        "Code": "https://bitbucket.org/licface/idm",
+        "Documentation": "https://github.com/cumulus13/pyidm",
+        "Code": "https://github.com/cumulus13/pyidm",
     },
-    license="BSD",
+    license="GPL",
     author="Hadi Cahyadi LD",
     author_email="cumulus13@gmail.com",
     maintainer="cumulus13 Team",
@@ -56,9 +56,9 @@ setup(
              "idm = pyidm.__main__:usage"
          ]
     },
-    data_files=['__version__.py', 'README.rst', 'LICENSE.rst'],
+    data_files=['__version__.py', 'README.md', 'LICENSE.rst'],
     include_package_data=True,
-    python_requires=">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*",
+    python_requires=">=2.7.*",
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
@@ -68,9 +68,6 @@ setup(
         "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.4",
-        "Programming Language :: Python :: 3.5",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
     ],
 )
+s

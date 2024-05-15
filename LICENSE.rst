@@ -1,4 +1,4 @@
-Copyright © 2019 by the cumulus13 team.
+Copyright � 2019-2024 by the cumulus13 team.
 
 Some rights reserved.
 
@@ -29,11 +29,3 @@ ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
 THIS SOFTWARE AND DOCUMENTATION, EVEN IF ADVISED OF THE POSSIBILITY OF
 SUCH DAMAGE.
-
-----
-
-idm uses parts of optparse written by Hadi Cahyadi, LD. Ward and maintained
-by the Python Software Foundation.
-
-Copyright © 2017-2019 Hadi Cahyadi, LD. All rights reserved.
-Copyright © 2002-2006 Python Software Foundation. All rights reserved.

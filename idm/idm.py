@@ -1,4 +1,12 @@
 #!/usr/bin/env python
+#coding:utf-8
+"""
+  Author : Hadi Cahyadi <cumulus13@gmail.com>
+  Purpose: command line to download with Internet Download Manager (IDM) on Windows OS
+  Created: 04/22/19
+  Support: 2.7+, 3+
+"""
+
 from __future__ import print_function
 import sys
 import os
@@ -41,15 +49,7 @@ class IDMan(object):
         return clipboard.paste()
 
     def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm = False, lflag = None, clip=False):
-        #print "link =", link
-        #print "referrer =", referrer
-        #print "postData =", postData
-        #print "user     =", user
-        #print "password =", password
-        #print "path_to_save =", path_to_save
-        #print "output   =", output
-        #print "lflag    =", lflag
-
+        
         if clip:
             link = self.get_from_clipboard()
         if confirm:
@@ -65,6 +65,11 @@ class IDMan(object):
         idman1 = cc.CreateObject(idman.CIDMLinkTransmitter, None, None, idman.ICIDMLinkTransmitter2)
         if path_to_save:
             os.path.realpath(path_to_save)
+        if isinstance(postData, dict):
+            postData = '\n'.join([f'{key}: {value}' for key, value in postData.items()])
+        if isinstance(cookie, dict):
+            cookie = '; '.join([f'{key}={value}' for key, value in cookie.items()])
+            
         idman1.SendLinkToIDM(link, referrer, cookie, postData, user, password, path_to_save, output, lflag)
 
     def docs(self):

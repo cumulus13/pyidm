@@ -1,32 +1,37 @@
 import io
-import re
-from setuptools import setup
-
-import os
+from setuptools import setup, find_packages
 import shutil
-#try:
-#    os.remove(os.path.join('idm', '__version__.py'))
-#except:
-#    pass
+import os
+
+# Ensure the appropriate directory exists and copy __version__.py into it
+#if not os.path.exists('idm'):
+    #os.makedirs('idm')
 shutil.copy2('__version__.py', 'idm')
 
-with io.open("README.rst", "rt", encoding="utf8") as f:
+# Read the README file
+with io.open("README.md", "rt", encoding="utf8") as f:
     readme = f.read()
 
-# with io.open("__version__.py", "rt", encoding="utf8") as f:
-    # version = re.search(r"version = \'(.*?)\'", f.read()).group(1)
-import __version__
-version = __version__.version
+# Read the version from idm/__version__.py
+version = {}
+with open("idm/__version__.py") as fp:
+    exec(fp.read(), version)
+version = version['version']
+
+# Determine the packages based on the extra provided
+extra_packages = ['idm']
+if 'pyidm' in os.environ.get('EXTRAS', '').split(','):
+    extra_packages = ['pyidm']
 
 setup(
     name="idm",
     version=version,
-    url="https://bitbucket.org/licface/idm",
+    url="https://github.com/cumulus13/pyidm",
     project_urls={
-        "Documentation": "https://bitbucket.org/licface/idm",
-        "Code": "https://bitbucket.org/licface/idm",
+        "Documentation": "https://github.com/cumulus13/pyidm",
+        "Code": "https://github.com/cumulus13/pyidm",
     },
-    license="BSD",
+    license="GPL",
     author="Hadi Cahyadi LD",
     author_email="cumulus13@gmail.com",
     maintainer="cumulus13 Team",
@@ -34,33 +39,35 @@ setup(
     description="Downloader with Internet Download Manager (Windows)",
     long_description=readme,
     long_description_content_type="text/markdown",
-    packages=["idm"],
+    packages=find_packages(),
     install_requires=[
         'argparse',
-        'pypiwin32',
-        'comtypes'
+        'pypiwin32; platform_system=="Windows"',
+        'comtypes; platform_system=="Windows"'
+        'configset', 
+        'pydebugger',
+        'make_colors'
     ],
-    entry_points = {
-         "console_scripts": [
-             "idm = idm.__main__:usage",
-             "pyidm = idm.__main__:usage",
-         ]
+    extras_require={
+        'pyidm': [],
     },
-    data_files=['__version__.py', 'README.rst', 'LICENSE.rst'],
+    entry_points={
+        "console_scripts": [
+            "idm = idm.__main__:usage",
+            "pyidm = idm.__main__:usage",
+        ]
+    },
+    data_files=['__version__.py', 'README.md', 'LICENSE.rst'],
     include_package_data=True,
-    python_requires=">=2.7, !=3.0.*, !=3.1.*, !=3.2.*, !=3.3.*",
+    python_requires=">=2.7",
     classifiers=[
         "Development Status :: 5 - Production/Stable",
         "Intended Audience :: Developers",
-        "License :: OSI Approved :: BSD License",
+        "License :: OSI Approved :: GPL License",
         "Operating System :: OS Independent",
         "Programming Language :: Python",
         "Programming Language :: Python :: 2",
         "Programming Language :: Python :: 2.7",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.4",
-        "Programming Language :: Python :: 3.5",
-        "Programming Language :: Python :: 3.6",
-        "Programming Language :: Python :: 3.7",
     ],
 )
