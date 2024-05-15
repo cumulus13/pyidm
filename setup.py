@@ -43,7 +43,7 @@ setup(
     install_requires=[
         'argparse',
         'pypiwin32; platform_system=="Windows"',
-        'comtypes; platform_system=="Windows"'
+        'comtypes; platform_system=="Windows"', 
         'configset', 
         'pydebugger',
         'make_colors'
