@@ -58,6 +58,7 @@ setup(
         ]
     },
     data_files=['__version__.py', 'README.md', 'LICENSE.rst'],
+    license_files=["LICENSE.rst"],    
     include_package_data=True,
     python_requires=">=2.7",
     classifiers=[
