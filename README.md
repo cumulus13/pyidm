@@ -1,3 +1,4 @@
+
 # idm
 
 Downloader with Internet Download Manager (Windows)
@@ -61,3 +62,6 @@ downloader.download(url, r"c:\DOWNLOADS", output=None, referrer=None, cookie=coo
 - License: [GPL](https://github.com/cumulus13/pyidm/blob/master/LICENSE.rst)
 - Code: [https://github.com/cumulus13/pyidm](https://github.com/cumulus13/pyidm)
 - Issue tracker: [https://github.com/cumulus13/pyidm/issues](https://github.com/cumulus13/pyidm/issues)
+
+## Author
+[Hadi Cahyadi](mailto:cumulus13@gmail.com)

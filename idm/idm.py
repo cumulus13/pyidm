@@ -23,6 +23,9 @@ from make_colors import make_colors
 import signal
 from pydebugger.debug import debug
 
+class IDMNotFound(Exception):
+    pass
+
 class IDMan(object):
     PID = os.getpid()
     CONFIG = configset()
@@ -61,7 +64,11 @@ class IDMan(object):
         except:
             cc.GetModule(self.tlb)
 
-        import comtypes.gen.IDManLib as idman 
+        
+        try:
+            import comtypes.gen.IDManLib as idman
+        except ImportError:
+            raise IDMNotFound(make_colors("Please install 'Internet Download Manager' first !", 'lw', 'r'))
         idman1 = cc.CreateObject(idman.CIDMLinkTransmitter, None, None, idman.ICIDMLinkTransmitter2)
         if path_to_save:
             os.path.realpath(path_to_save)
