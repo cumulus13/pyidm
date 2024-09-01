@@ -11,10 +11,6 @@ from __future__ import print_function
 import sys
 import os
 import traceback
-if not 'linux' in sys.platform:
-    import comtypes.client as cc
-else:
-    import comtypes
 import argparse
 if sys.version_info.major == 2:
     input = raw_input
@@ -26,6 +22,17 @@ from pydebugger.debug import debug
 class IDMNotFound(Exception):
     pass
 
+class OSNotSupport(Exception):
+    pass
+
+if not 'linux' in sys.platform:
+    import comtypes.client as cc
+    import comtypes
+    from comtypes import automation
+else:
+    raise OSNotSupport(make_colors('This only for Windows OS !'))
+
+
 class IDMan(object):
     PID = os.getpid()
     CONFIG = configset()
@@ -33,17 +40,18 @@ class IDMan(object):
     def __init__(self):
         super(IDMan, self)
         self.tlb = r'c:\Program Files\Internet Download Manager\idmantypeinfo.tlb'
-        if not self.tlb:
-            self.tlb = r'c:\Program Files\Internet Download Manager (x86)\idmantypeinfo.tlb'
-        if not self.tlb:
-            print("It seem IDM not installer, please install first !")
-            sys.exit("It seem IDM not installer, please install first !")
+        if not os.path.isfile(self.tlb):
+            self.tlb = r'c:\Program Files (x86)\Internet Download Manager\idmantypeinfo.tlb'
+        if not os.path.isfile(self.tlb):
+            #print("It seem IDM not installed, please install first !")
+            #sys.exit("It seem IDM not installed, please install first !")
+            raise IDMNotFound(make_colors("It seem IDM (Internet Download Manager) not installed, please install first !", 'lw', 'r'))
 
     def get_from_clipboard(self):
         try:
             import clipboard
         except ImportError:
-            print("Module Clipboard not Installer yet, please install first")
+            print("Module 'clipboard' not Installer yet, please install first [pip install clipboard]")
             q = input("Please re-input url download to:")
             if not q:
                 sys.exit("You not input URL Download !")
@@ -51,14 +59,15 @@ class IDMan(object):
                 return q
         return clipboard.paste()
 
-    def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm = False, lflag = None, clip=False):
+    #def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm = False, lflag = None, clip=False):
+    def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, user_agent=None, clip=False):
         
-        if clip:
+        lflag = 5
+        
+        if clip or link == 'c':
             link = self.get_from_clipboard()
         if confirm:
             lflag = 0
-        else:
-            lflag = 5
         try:
             cc.GetModule(['{ECF21EAB-3AA8-4355-82BE-F777990001DD}', 1, 0])
         except:
@@ -72,12 +81,32 @@ class IDMan(object):
         idman1 = cc.CreateObject(idman.CIDMLinkTransmitter, None, None, idman.ICIDMLinkTransmitter2)
         if path_to_save:
             os.path.realpath(path_to_save)
-        if isinstance(postData, dict):
-            postData = '\n'.join([f'{key}: {value}' for key, value in postData.items()])
+        #if isinstance(postData, dict):
+            #postData = '\n'.join([f'{key}: {value}' for key, value in postData.items()])
         if isinstance(cookie, dict):
             cookie = '; '.join([f'{key}={value}' for key, value in cookie.items()])
-            
-        idman1.SendLinkToIDM(link, referrer, cookie, postData, user, password, path_to_save, output, lflag)
+        
+        if isinstance(postData, dict):
+            postData = '\n'.join([f'{key}={value}' for key, value in postData.items()])
+        
+        reserved1 = automation.VARIANT()
+        if user_agent:
+            reserved1.vt = automation.VT_BSTR
+            reserved1.value = user_agent
+        else:
+            reserved1.vt = automation.VT_EMPTY
+        
+        # Prepare reserved2 (not used)
+        reserved2 = automation.VARIANT()
+        reserved2.vt = automation.VT_EMPTY
+        
+        #idman1.SendLinkToIDM(link, referrer, cookie, postData, user, password, path_to_save, output, lflag)
+        try:
+            idman1.SendLinkToIDM2(link, referrer, cookie, postData, user, password, path_to_save, output, lflag, reserved1, reserved2)
+        except Exception as e:
+            print("Error: {}".format(make_colors(str(e), 'lw', 'r')))
+        else:
+            print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))        
 
     def docs(self):
         print(make_colors("uppercase words is VALUE NAME", 'lc'))
@@ -88,11 +117,17 @@ class IDMan(object):
     def usage(self):
         description = make_colors("Command line downloader with/Via Internet Download Manager(IDM), type 'c' for get url from clipboard", 'lg')
         parse = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description = description)
-        parse.add_argument('URL', action='store', help='url to download, or "c" to get url from clipboard')
+        parse.add_argument('URLS', action='store', help='url to download, or "c" to get url from clipboard', nargs = '*')
         parse.add_argument('-p', '--path', action='store', help='Path to save', default=os.getcwd())
         parse.add_argument('-o', '--output', help='Save with different name', action='store')
         parse.add_argument('-c', '--confirm', help='Confirm before download', action='store_true')
-        parse.add_argument('-C', '--clip', help='Get URL from clipboard', action='store_true')
+        #parse.add_argument('-C', '--clip', help='Get URL from clipboard', action='store_true')
+        parse.add_argument('-r', '--referrer', help='Url referrer', action='store')
+        parse.add_argument('-C', '--cookie', help='Cookie string or dict', action='store', type = str)
+        parse.add_argument('-D', '--post-data', help='Post Data string or dict', action='store', type = str)
+        parse.add_argument('-U', '--username', help='Username if require', action='store', type = str)
+        parse.add_argument('-P', '--password', help='Password if require', action='store', type = str)
+        parse.add_argument('-ua', '--user-agent', help='Send with custom User-Agent string', action='store')
         parse.add_argument('--config',  help = 'set config, format section:option:value, for list valid section/option type "doc"', action = 'store')
         if len(sys.argv) ==1:
             parse.print_help()
@@ -120,7 +155,10 @@ class IDMan(object):
             else:
                 download_path = args.path or self.CONFIG.get_config('download', 'path')
                 confirm = args.confirm or self.CONFIG.get_config('download', 'confirm')
-                self.download(args.URL, download_path, args.output, confirm=confirm, clip=args.clip)
+                user_agent = args.user_agent or self.CONFIG.get_config('data', 'user_agent')
+                #def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, clip=False, user_agent=None):
+                for url in args.URLS:
+                    self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent)
 
 
 if __name__ == '__main__':
