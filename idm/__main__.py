@@ -1,4 +1,4 @@
-import idm
+from . import idm
 
 def usage():
 	c = idm.IDMan()

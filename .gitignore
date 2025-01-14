@@ -10,3 +10,5 @@
 dist/
 build/
 *.egg-info/
+setup2.py
+__pycache__/

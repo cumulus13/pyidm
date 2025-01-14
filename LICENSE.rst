@@ -1,4 +1,4 @@
-Copyright © 2019-2024 by the cumulus13 team.
+Copyright ï¿½ 2019-2025 by the cumulus13 team.
 
 Some rights reserved.
 

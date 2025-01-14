@@ -17,7 +17,11 @@ if sys.version_info.major == 2:
 from configset import configset
 from make_colors import make_colors
 import signal
-from pydebugger.debug import debug
+if os.getenv('DEBUG') == '1':
+    from pydebugger.debug import debug
+else:
+    def debug(*args, **kwargs):
+        return 
 
 class IDMNotFound(Exception):
     pass
