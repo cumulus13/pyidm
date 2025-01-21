@@ -93,7 +93,7 @@ options:
 ## Support
 
 - Python 2.7+, Python 3.x
-- Windows (only), for Linux you can't use pywget (pip install pywget)
+- Windows (only), for Linux you can use pywget (pip install pywget)
 
 ## Tips
 `always provide ‘referrer’, some sites must have referrer in header`
