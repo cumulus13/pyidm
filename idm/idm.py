@@ -13,6 +13,10 @@ import os
 import traceback
 import argparse
 if sys.version_info.major == 2: input = raw_input
+try:
+    from pathlib import Path
+except:
+    pass
 from configset import configset
 from make_colors import make_colors
 import signal
@@ -38,7 +42,11 @@ else:
 
 class IDMan(object):
     PID = os.getpid()
-    CONFIG = configset()
+    if sys.version_info.major == '2':
+        CONFIGFILE = os.path.join(os.path.dirname(__file__), 'idm.ini')
+    else:
+        CONFIGFILE = str(Path(__file__).parent / 'idm.ini')
+    CONFIG = configset(CONFIGFILE)
     
     def __init__(self):
         super(IDMan, self)
@@ -112,7 +120,7 @@ class IDMan(object):
         except Exception as e:
             print("Error: {}".format(make_colors(str(e), 'lw', 'r')))
         else:
-            print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))        
+            if not self.CONFIG.get_config('debug', 'verbose') == False: print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))        
 
     def docs(self):
         print(make_colors("uppercase words is VALUE NAME", 'lc'))
