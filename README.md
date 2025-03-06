@@ -25,7 +25,18 @@ url = "http://test.com/test.exe"
 downloader.download(url, r"c:\DOWNLOADS", "test_output.exe")
 ```
 
-And "Internet Download Manager (IDM)" will open then immediately download the URL
+and "Internet Download Manager (IDM)" will open then immediately download the URL
+
+add link without start downloading
+
+```python
+from idm import IDMan
+
+downloader = IDMan()
+url = "http://test.com/test.exe"
+
+downloader.download(url, r"c:\DOWNLOADS", "test_output.exe", add_only=True)
+```
 
 or run on terminal/cmd
 
@@ -65,10 +76,10 @@ usage: idm/pyidm [-h] [-p PATH] [-o OUTPUT] [-c] [-r REFERRER] [-C COOKIE] [-D P
               [-ua USER_AGENT] [--config CONFIG]
               [URLS ...]
 
-Command line downloader with/Via Internet Download Manager(IDM), type 'c' for get url from clipboard
+Command line downloader with/Via Internet Download Manager(IDM)
 
 positional arguments:
-  URLS                  url to download, or "c" to get url from clipboard
+  URLS                  url to download, or "c" to get url from clipboard or a text file containing one link per line
 
 options:
   -h, --help            show this help message and exit
@@ -76,6 +87,7 @@ options:
   -o OUTPUT, --output OUTPUT
                         Save with different name
   -c, --confirm         Confirm before download
+  -a, --add             Add link to IDM without start downloading
   -r REFERRER, --referrer REFERRER
                         Url referrer
   -C COOKIE, --cookie COOKIE

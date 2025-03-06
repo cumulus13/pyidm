@@ -12,3 +12,5 @@ build/
 *.egg-info/
 setup2.py
 __pycache__/
+test/
+idm/idm_ctrl*

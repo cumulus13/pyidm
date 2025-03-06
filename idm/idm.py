@@ -12,8 +12,7 @@ import sys
 import os
 import traceback
 import argparse
-if sys.version_info.major == 2:
-    input = raw_input
+if sys.version_info.major == 2: input = raw_input
 from configset import configset
 from make_colors import make_colors
 import signal
@@ -64,7 +63,7 @@ class IDMan(object):
         return clipboard.paste()
 
     #def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm = False, lflag = None, clip=False):
-    def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, user_agent=None, clip=False):
+    def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, user_agent=None, add_only=False, clip=False):
         
         lflag = 5
         
@@ -72,12 +71,15 @@ class IDMan(object):
             link = self.get_from_clipboard()
         if confirm:
             lflag = 0
+        elif add_only:
+            lflag = 2
+        else:
+            lflag = 1
         try:
             cc.GetModule(['{ECF21EAB-3AA8-4355-82BE-F777990001DD}', 1, 0])
         except:
             cc.GetModule(self.tlb)
 
-        
         try:
             import comtypes.gen.IDManLib as idman
         except ImportError:
@@ -119,13 +121,13 @@ class IDMan(object):
         print(make_colors('download:config:1 or 0', 'lg'))
         
     def usage(self):
-        description = make_colors("Command line downloader with/Via Internet Download Manager(IDM), type 'c' for get url from clipboard", 'lg')
+        description = make_colors("Command line downloader with/Via Internet Download Manager(IDM)", 'lg')
         parse = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description = description)
-        parse.add_argument('URLS', action='store', help='url to download, or "c" to get url from clipboard', nargs = '*')
+        parse.add_argument('URLS', action='store', help='url to download, or "c" to get url from clipboard or a text file containing one link per line' , nargs = '*')
         parse.add_argument('-p', '--path', action='store', help='Path to save', default=os.getcwd())
         parse.add_argument('-o', '--output', help='Save with different name', action='store')
         parse.add_argument('-c', '--confirm', help='Confirm before download', action='store_true')
-        #parse.add_argument('-C', '--clip', help='Get URL from clipboard', action='store_true')
+        parse.add_argument('-a', '--add', help='Add link to IDM without start downloading', action='store_true')
         parse.add_argument('-r', '--referrer', help='Url referrer', action='store')
         parse.add_argument('-C', '--cookie', help='Cookie string or dict', action='store', type = str)
         parse.add_argument('-D', '--post-data', help='Post Data string or dict', action='store', type = str)
@@ -133,6 +135,7 @@ class IDMan(object):
         parse.add_argument('-P', '--password', help='Password if require', action='store', type = str)
         parse.add_argument('-ua', '--user-agent', help='Send with custom User-Agent string', action='store')
         parse.add_argument('--config',  help = 'set config, format section:option:value, for list valid section/option type "doc"', action = 'store')
+        # parse.add_argument('--clip', help='Get URL from clipboard for one link', action='store_true')
         if len(sys.argv) ==1:
             parse.print_help()
         else:
@@ -160,9 +163,8 @@ class IDMan(object):
                 download_path = args.path or self.CONFIG.get_config('download', 'path')
                 confirm = args.confirm or self.CONFIG.get_config('download', 'confirm')
                 user_agent = args.user_agent or self.CONFIG.get_config('data', 'user_agent')
-                #def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, clip=False, user_agent=None):
                 for url in args.URLS:
-                    self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent)
+                    self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent, args.add)
 
 
 if __name__ == '__main__':
