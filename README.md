@@ -41,8 +41,8 @@ downloader.download(url, r"c:\DOWNLOADS", "test_output.exe", add_only=True)
 or run on terminal/cmd
 
 ```bash
-> python idm.py "http://test.com/test.exe" -p C:\DOWNLOADS -o test_output.exe -c -ua "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36" -r "http://test.com/test.exe" -U admin -P admin123 -D "Authorization=Bearer KN9WW7k5gKgCnQLpnmWWM7LytAuSUwb9\nCookie=accountToken=KN9WW7k5gKgCnQLpnmWWM7LytAuSUwb9" -C "accountToken=KN9WW7k5gKgCnQLpnmWWM7LytAuSUwb9;"
-
+> idm "http://test.com/test.exe" -p C:\DOWNLOADS -o test_output.exe -c -ua "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/67.0.3396.99 Safari/537.36" -r "http://test.com/test.exe" -U admin -P admin123 -D "Authorization=Bearer KN9WW7k5gKgCnQLpnmWWM7LytAuSUwb9\nCookie=accountToken=KN9WW7k5gKgCnQLpnmWWM7LytAuSUwb9" -C "accountToken=KN9WW7k5gKgCnQLpnmWWM7LytAuSUwb9;"
+# or pyidm
 ```
 
 Example use with headers as postData, cookies and other parameters:
@@ -105,7 +105,7 @@ options:
 ## Support
 
 - Python 2.7+, Python 3.x
-- Windows (only), for Linux you can't use pywget (pip install pywget)
+- Windows (only), for Linux you can use pywget (pip install pywget)
 
 ## Tips
 `always provide ‘referrer’, some sites must have referrer in header`
