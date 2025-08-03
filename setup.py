@@ -42,7 +42,6 @@ setup(
     packages=find_packages(),
     install_requires=[
         'argparse',
-        'pypiwin32; platform_system=="Windows"',
         'comtypes; platform_system=="Windows"', 
         'configset', 
         'pydebugger',
