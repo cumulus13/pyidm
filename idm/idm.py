@@ -35,7 +35,9 @@ class OSNotSupport(Exception):
 if not 'linux' in sys.platform:
     import comtypes.client as cc
     import comtypes
-    from comtypes import automation
+    from comtypes import automation, windll
+    from ctypes import wintypes, byref, create_unicode_buffer
+
 else:
     raise OSNotSupport(make_colors('This only for Windows OS !'))
 
@@ -127,6 +129,41 @@ class IDMan(object):
         print("\n")
         print(make_colors('download:path:DIR_NAME', 'ly'))
         print(make_colors('download:config:1 or 0', 'lg'))
+
+    def bring_to_top(self):
+        user32 = windll.user32
+
+        # Callback for EnumWindows
+        EnumWindowsProc = comtypes.WINFUNCTYPE(
+            wintypes.BOOL,
+            wintypes.HWND,
+            wintypes.LPARAM
+        )
+
+        find_title = "internet download manager"
+        found = []
+
+        def foreach_window(hwnd, lParam):
+            # Filter only visible window
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    # print(f"HWND: {hwnd} | Title: {buf.value}")
+                    if find_title in buf.value.lower():
+                        found.append([hwnd, buf.value])
+            return True
+
+        # Enumerate all window
+        user32.EnumWindows(EnumWindowsProc(foreach_window), 0)
+
+        # print(f"found: {found}")
+        if found:
+            user32.ShowWindow(found[0][0], 5)   # SW_SHOW
+            user32.SetForegroundWindow(found[0][0])
+            user32.BringWindowToTop(found[0][0])
+
         
     def usage(self):
         description = make_colors("Command line downloader with/Via Internet Download Manager(IDM)", 'lg')
@@ -146,6 +183,7 @@ class IDMan(object):
         # parse.add_argument('--clip', help='Get URL from clipboard for one link', action='store_true')
         if len(sys.argv) ==1:
             parse.print_help()
+            self.bring_to_top()
         else:
             try:
                 if sys.argv[1] == '--config' and sys.argv[2] == 'doc':

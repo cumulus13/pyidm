@@ -14,3 +14,5 @@ setup2.py
 __pycache__/
 test/
 idm/idm_ctrl*
+# Added entries (1 items)
+build.bat
