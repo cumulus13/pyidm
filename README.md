@@ -117,6 +117,7 @@ options:
 - Issue tracker: [https://github.com/cumulus13/pyidm/issues](https://github.com/cumulus13/pyidm/issues)
 
 ## Author
+
 [Hadi Cahyadi](mailto:cumulus13@gmail.com)
 
 [![Buy Me a Coffee](https://www.buymeacoffee.com/assets/img/custom_images/orange_img.png)](https://www.buymeacoffee.com/cumulus13)

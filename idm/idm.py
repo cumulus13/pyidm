@@ -1,26 +1,30 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 #coding:utf-8
-"""
-  Author : Hadi Cahyadi <cumulus13@gmail.com>
-  Purpose: command line to download with Internet Download Manager (IDM) on Windows OS
-  Created: 04/22/19
-  Support: 2.7+, 3+
-"""
 
-from __future__ import print_function
-import sys
+# File        : idm/idm.py
+# Author      : Hadi Cahyadi <cumulus13@gmail.com>
+# Created     : 04/22/19
+# Description : command line to download with Internet Download Manager (IDM) on Windows OS
+# Repo        : https://github.com/cumulus13/pyidm
+# License     : MIT
+
 import os
+from envdot import load_env  # type: ignore
+load_env()
+
+LOG_LEVEL = os.getenv("PYIDM_LOG_LEVEL", 'CRITICAL')
+
+import logging
+logging.getLogger('ctypes').setLevel(getattr(logging, LOG_LEVEL))
+
+import sys
 import traceback
 import argparse
-if sys.version_info.major == 2: input = raw_input
-try:
-    from pathlib import Path
-except:
-    pass
-from configset import configset
-from make_colors import make_colors
+from pathlib import Path
+from make_colors import make_colors  # type: ignore
 import signal
-if os.getenv('DEBUG') == '1':
+
+if str(os.getenv('DEBUG', "0")).lower() in ("1", "true", "ok", "yes", "on"):
     from pydebugger.debug import debug
 else:
     def debug(*args, **kwargs):
@@ -36,7 +40,7 @@ if not 'linux' in sys.platform:
     import comtypes.client as cc
     import comtypes
     from comtypes import automation, windll
-    from ctypes import wintypes, byref, create_unicode_buffer
+    from ctypes import wintypes, create_unicode_buffer
 
 else:
     raise OSNotSupport(make_colors('This only for Windows OS !'))
@@ -44,11 +48,8 @@ else:
 
 class IDMan(object):
     PID = os.getpid()
-    if sys.version_info.major == '2':
-        CONFIGFILE = os.path.join(os.path.dirname(__file__), 'idm.ini')
-    else:
-        CONFIGFILE = str(Path(__file__).parent / 'idm.ini')
-    CONFIG = configset(CONFIGFILE)
+    CONFIGFILE = str(Path(__file__).parent / 'idm.ini')
+    CONFIG = load_env(CONFIGFILE)
     
     def __init__(self):
         super(IDMan, self)
@@ -65,14 +66,15 @@ class IDMan(object):
             import clipboard
         except ImportError:
             print("Module 'clipboard' not Installer yet, please install first [pip install clipboard]")
-            q = input("Please re-input url download to:")
+            q = input("Please re-input url download [q=quit/x=exit]: ")
             if not q:
                 sys.exit("You not input URL Download !")
+            elif  q and q.lower() in ('q', 'exit', 'quit', 'q'):
+                sys.exit("quit ...")
             else:
                 return q
         return clipboard.paste()
 
-    #def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm = False, lflag = None, clip=False):
     def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, user_agent=None, add_only=False, clip=False):
         
         lflag = 5
@@ -94,7 +96,7 @@ class IDMan(object):
             import comtypes.gen.IDManLib as idman
         except ImportError:
             raise IDMNotFound(make_colors("Please install 'Internet Download Manager' first !", 'lw', 'r'))
-        idman1 = cc.CreateObject(idman.CIDMLinkTransmitter, None, None, idman.ICIDMLinkTransmitter2)
+        idman1 = cc.CreateObject(idman.CIDMLinkTransmitter, None, None, idman.ICIDMLinkTransmitter2)  # type: ignore
         if path_to_save:
             os.path.realpath(path_to_save)
         #if isinstance(postData, dict):
@@ -122,7 +124,7 @@ class IDMan(object):
         except Exception as e:
             print("Error: {}".format(make_colors(str(e), 'lw', 'r')))
         else:
-            if not self.CONFIG.get_config('debug', 'verbose') == False: print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))        
+            if not self.CONFIG.get_config('DEBUG_VERBOSE') == False: print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))        
 
     def docs(self):
         print(make_colors("uppercase words is VALUE NAME", 'lc'))
@@ -166,8 +168,13 @@ class IDMan(object):
 
         
     def usage(self):
+        try:
+            from rchf import CustomRichHelpFormatter  # type: ignore
+        except:
+            CustomRichHelpFormatter = argparse.RawTextHelpFormatter
+
         description = make_colors("Command line downloader with/Via Internet Download Manager(IDM)", 'lg')
-        parse = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter, description = description)
+        parse = argparse.ArgumentParser(formatter_class=CustomRichHelpFormatter, description = description, prog="idm")
         parse.add_argument('URLS', action='store', help='url to download, or "c" to get url from clipboard or a text file containing one link per line' , nargs = '*')
         parse.add_argument('-p', '--path', action='store', help='Path to save', default=os.getcwd())
         parse.add_argument('-o', '--output', help='Save with different name', action='store')
@@ -181,6 +188,7 @@ class IDMan(object):
         parse.add_argument('-ua', '--user-agent', help='Send with custom User-Agent string', action='store')
         parse.add_argument('--config',  help = 'set config, format section:option:value, for list valid section/option type "doc"', action = 'store')
         # parse.add_argument('--clip', help='Get URL from clipboard for one link', action='store_true')
+
         if len(sys.argv) ==1:
             parse.print_help()
             self.bring_to_top()
@@ -206,9 +214,9 @@ class IDMan(object):
             if args.config == 'doc':
                 self.docs()
             else:
-                download_path = args.path or self.CONFIG.get_config('download', 'path')
-                confirm = args.confirm or self.CONFIG.get_config('download', 'confirm')
-                user_agent = args.user_agent or self.CONFIG.get_config('data', 'user_agent')
+                download_path = args.path or self.CONFIG.get_config('DOWNLOAD_PATH')
+                confirm = args.confirm or self.CONFIG.get_config('DOWNLOAD_CONFIRM')
+                user_agent = args.user_agent or self.CONFIG.get_config('DATA_USER_AGENT')
                 for url in args.URLS:
                     self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent, args.add)
 
