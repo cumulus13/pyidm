@@ -41,11 +41,14 @@ setup(
     long_description_content_type="text/markdown",
     packages=find_packages(),
     install_requires=[
+        'pywin32',
+        'envdot',
         'argparse',
         'comtypes; platform_system=="Windows"', 
         'configset', 
         'pydebugger',
-        'make_colors'
+        'make_colors',
+        'clipboard'
     ],
     extras_require={
         'pyidm': [],

@@ -25,7 +25,11 @@ from make_colors import make_colors  # type: ignore
 import signal
 
 if str(os.getenv('DEBUG', "0")).lower() in ("1", "true", "ok", "yes", "on"):
-    from pydebugger.debug import debug
+    try:
+        from pydebugger.debug import debug
+    except:
+        def debug(*args, **kwargs):
+            return     
 else:
     def debug(*args, **kwargs):
         return 
