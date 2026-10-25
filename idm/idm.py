@@ -24,6 +24,11 @@ from pathlib import Path
 from make_colors import make_colors  # type: ignore
 import signal
 
+try:
+    from .server import AgentServer, AgentError, send as agent_send, DEFAULT_HOST, DEFAULT_PORT
+except ImportError:
+    from server import AgentServer, AgentError, send as agent_send, DEFAULT_HOST, DEFAULT_PORT
+
 if str(os.getenv('DEBUG', "0")).lower() in ("1", "true", "ok", "yes", "on"):
     try:
         from pydebugger.debug import debug
@@ -52,6 +57,7 @@ else:
 
 class IDMan(object):
     PID = os.getpid()
+    last_error = None
     CONFIGFILE = str(Path(__file__).parent / 'idm.ini')
     CONFIG = load_env(CONFIGFILE)
     
@@ -102,7 +108,7 @@ class IDMan(object):
             raise IDMNotFound(make_colors("Please install 'Internet Download Manager' first !", 'lw', 'r'))
         idman1 = cc.CreateObject(idman.CIDMLinkTransmitter, None, None, idman.ICIDMLinkTransmitter2)  # type: ignore
         if path_to_save:
-            os.path.realpath(path_to_save)
+            path_to_save = os.path.realpath(path_to_save)
         #if isinstance(postData, dict):
             #postData = '\n'.join([f'{key}: {value}' for key, value in postData.items()])
         if isinstance(cookie, dict):
@@ -123,12 +129,72 @@ class IDMan(object):
         reserved2.vt = automation.VT_EMPTY
         
         #idman1.SendLinkToIDM(link, referrer, cookie, postData, user, password, path_to_save, output, lflag)
+        self.last_error = None
         try:
             idman1.SendLinkToIDM2(link, referrer, cookie, postData, user, password, path_to_save, output, lflag, reserved1, reserved2)
         except Exception as e:
+            self.last_error = str(e)
             print("Error: {}".format(make_colors(str(e), 'lw', 'r')))
+            return False
         else:
-            if not self.CONFIG.get_config('DEBUG_VERBOSE') == False: print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))        
+            if not self.CONFIG.get_config('DEBUG_VERBOSE') == False: print("\n", make_colors("Link sent to IDM successfully.", 'b', 'y'))
+            return True
+
+    def _cfg(self, name, default=None):
+        try:
+            val = self.CONFIG.get_config(name)
+        except Exception:
+            return default
+        if val is None or val is False or val == '':
+            return default
+        return val
+
+    def expand_urls(self, urls):
+        """'c' -> clipboard content, existing file -> one link per line, otherwise as is."""
+        out = []
+        for item in urls:
+            if item == 'c':
+                text = self.get_from_clipboard()
+                lines = str(text or '').splitlines()
+            elif os.path.isfile(item):
+                with open(item, 'r', encoding='utf-8', errors='ignore') as fh:
+                    lines = fh.read().splitlines()
+            else:
+                lines = [item]
+            for line in lines:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    out.append(line)
+        return out
+
+    def serve(self, host=None, port=None, token=None, verbose=False):
+        host = host or self._cfg('SERVER_HOST') or DEFAULT_HOST
+        try:
+            port = int(port or self._cfg('SERVER_PORT') or DEFAULT_PORT)
+        except ValueError:
+            sys.exit(make_colors("INVALID port !", 'lw', 'r'))
+        token = token or os.getenv('PYIDM_TOKEN') or self._cfg('SERVER_TOKEN')
+        defaults = {
+            'path': self._cfg('DOWNLOAD_PATH'),
+            'confirm': True if self._cfg('DOWNLOAD_CONFIRM') else None,
+            'user_agent': self._cfg('DATA_USER_AGENT'),
+        }
+        try:
+            srv = AgentServer(self, host, port, token, defaults=defaults, verbose=verbose)
+        except ValueError as e:
+            sys.exit(make_colors(str(e), 'lw', 'r'))
+        print(make_colors("pyidm agent server listening on http://%s:%s (%s) - Ctrl+C to stop" % (
+            host, port, "token required" if token else "no token, loopback only"), 'b', 'y'))
+        srv.serve()
+
+    def send_to_agent(self, agent, urls, token=None, **opts):
+        try:
+            res = agent_send(agent, urls, opts, token)
+        except AgentError as e:
+            print(make_colors(str(e), 'lw', 'r'))
+            return False
+        print(make_colors("Sent {} link(s) to agent {}".format(res.get('queued', len(urls)), agent), 'b', 'y'))
+        return True
 
     def docs(self):
         print(make_colors("uppercase words is VALUE NAME", 'lc'))
@@ -180,7 +246,7 @@ class IDMan(object):
         description = make_colors("Command line downloader with/Via Internet Download Manager(IDM)", 'lg')
         parse = argparse.ArgumentParser(formatter_class=CustomRichHelpFormatter, description = description, prog="idm")
         parse.add_argument('URLS', action='store', help='url to download, or "c" to get url from clipboard or a text file containing one link per line' , nargs = '*')
-        parse.add_argument('-p', '--path', action='store', help='Path to save', default=os.getcwd())
+        parse.add_argument('-p', '--path', action='store', help='Path to save (default: current dir; on agent server: its configured path)')
         parse.add_argument('-o', '--output', help='Save with different name', action='store')
         parse.add_argument('-c', '--confirm', help='Confirm before download', action='store_true')
         parse.add_argument('-a', '--add', help='Add link to IDM without start downloading', action='store_true')
@@ -190,6 +256,14 @@ class IDMan(object):
         parse.add_argument('-U', '--username', help='Username if require', action='store', type = str)
         parse.add_argument('-P', '--password', help='Password if require', action='store', type = str)
         parse.add_argument('-ua', '--user-agent', help='Send with custom User-Agent string', action='store')
+        parse.add_argument('-s', '--server', help='Run agent server: receive links over HTTP and forward them to IDM (COM)', action='store_true')
+        parse.add_argument('--host', help='Agent server bind host (default: 127.0.0.1)', action='store')
+        parse.add_argument('--port', help='Agent server port (default: 8899)', action='store', type=int)
+        parse.add_argument('--token', help='Agent server token (or env PYIDM_TOKEN), required if host is not loopback', action='store')
+        parse.add_argument('-A', '--agent', help='Send links to an agent server instead of local IDM, e.g. http://192.168.1.10:8899', action='store')
+        parse.add_argument('--agent-token', help='Token for the agent server (or env PYIDM_TOKEN)', action='store')
+        parse.add_argument('--local', help='Ignore configured agent url, send to local IDM', action='store_true')
+        parse.add_argument('-v', '--verbose', help='Verbose agent server log', action='store_true')
         parse.add_argument('--config',  help = 'set config, format section:option:value, for list valid section/option type "doc"', action = 'store')
         # parse.add_argument('--clip', help='Get URL from clipboard for one link', action='store_true')
 
@@ -217,12 +291,25 @@ class IDMan(object):
             args = parse.parse_args()
             if args.config == 'doc':
                 self.docs()
+            elif args.server:
+                self.serve(args.host, args.port, args.token, args.verbose)
             else:
-                download_path = args.path or self.CONFIG.get_config('DOWNLOAD_PATH')
-                confirm = args.confirm or self.CONFIG.get_config('DOWNLOAD_CONFIRM')
-                user_agent = args.user_agent or self.CONFIG.get_config('DATA_USER_AGENT')
-                for url in args.URLS:
-                    self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent, args.add)
+                urls = self.expand_urls(args.URLS)
+                agent = None if args.local else (args.agent or self._cfg('AGENT_URL'))
+                if agent:
+                    token = args.agent_token or os.getenv('PYIDM_TOKEN') or self._cfg('AGENT_TOKEN')
+                    if not self.send_to_agent(agent, urls, token, path=args.path, output=args.output,
+                                              referrer=args.referrer, cookie=args.cookie, post_data=args.post_data,
+                                              username=args.username, password=args.password,
+                                              confirm=True if args.confirm else None,
+                                              user_agent=args.user_agent, add_only=True if args.add else None):
+                        sys.exit(1)
+                else:
+                    download_path = args.path or os.getcwd()
+                    confirm = args.confirm or self.CONFIG.get_config('DOWNLOAD_CONFIRM')
+                    user_agent = args.user_agent or self.CONFIG.get_config('DATA_USER_AGENT')
+                    for url in urls:
+                        self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent, args.add)
 
 
 if __name__ == '__main__':

@@ -22,3 +22,14 @@ build.bat
 
 # Added entries (1 items)
 debug.log
+
+# Added entries (1 items)
+*.patch
+
+# Added entries (3 items)
+*.ini
+*.sha256
+gitignore_backup/
+
+# Added entries (1 items)
+idm_ctrl.*

@@ -32,9 +32,9 @@ setup(
         "Code": "https://github.com/cumulus13/pyidm",
     },
     license="GPL",
-    author="Hadi Cahyadi LD",
+    author="Hadi Cahyadi",
     author_email="cumulus13@gmail.com",
-    maintainer="cumulus13 Team",
+    maintainer="Hadi Cahyadi",
     maintainer_email="cumulus13@gmail.com",
     description="Downloader with Internet Download Manager (Windows)",
     long_description=readme,
@@ -59,8 +59,8 @@ setup(
             "pyidm = idm.__main__:usage",
         ]
     },
-    data_files=['__version__.py', 'README.md', 'LICENSE.rst'],
-    license_files=["LICENSE.rst"],    
+    data_files=['__version__.py', 'README.md', 'LICENSE'],
+    license_files=["LICENSE"],    
     include_package_data=True,
     python_requires=">=2.7",
     classifiers=[

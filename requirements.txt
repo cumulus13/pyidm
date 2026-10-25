@@ -1,0 +1,8 @@
+pywin32
+envdot
+argparse
+comtypes; platform_system=="Windows" 
+configset 
+git+https://github.com/cumulus13/pydebugger2
+make_colors
+clipboard
