@@ -373,7 +373,7 @@ Remove with `schtasks /Delete /TN "pyidm-agent" /F`. The agent must run in the s
 ## Support
 
 - Python 3.7+
-- Windows (only), for Linux you can use `pywget` (pip install [pywget](https://github.com/cumulus13/pywget)) or `[wgetpanel](https://github.com/cumulus13/wgetpanel)`
+- Windows (only), for Linux you can use `pywget` (pip install [pywget](https://github.com/cumulus13/pywget)) or [wgetpanel](https://github.com/cumulus13/wgetpanel)
 - The agent *client* (`idm -A`, `agent_send`) only needs HTTP access to the agent, but the `idm` package itself currently imports Windows-only modules.
 
 ## Tips
