@@ -63,7 +63,7 @@ flowchart TD
     F -. "idm --server / local download" .-> G["Clear message:<br/>'Local IDM (COM) is only available on Windows'"]
 ```
 
-[![Architecture](https://i.ibb.co/rfRjzwdK/pyidm-architecture11.jpg)](https://i.ibb.co/rfRjzwdK/pyidm-architecture11.jpg)
+[![Architecture](https://files.catbox.moe/g3tyv7.jpg)](https://files.catbox.moe/g3tyv7.jpg)
 
 On non-Windows systems `import idm` and `idm -A ...` work; `idm --server` and local downloads print a clear message and exit with code 1 instead of crashing.
 The Windows-only packages are declared with environment markers (`sys_platform == "win32"`), so `idm[com]`, `idm[win]` and `idm[all]` are harmless on other systems too.
@@ -201,7 +201,7 @@ flowchart TD
     TR --> END
 ```
 
-[![Architecture 1](https://i.ibb.co/Jw56tYxF/pyidm-architecture12.jpg)](https://i.ibb.co/Jw56tYxF/pyidm-architecture12.jpg)
+[![Architecture 1](https://files.catbox.moe/iv0h2f.jpg)](https://files.catbox.moe/iv0h2f.jpg)
 
 ## Agent server mode
 
