@@ -13,6 +13,7 @@ Downloader with Internet Download Manager (Windows), with an HTTP **agent server
   - [Download completion tracking](#download-completion-tracking)
   - [HTTP API](#http-api)
   - [Job lifecycle](#job-lifecycle)
+  - [Job persistence](#job-persistence)
   - [FAQ: what is the queue for?](#faq-what-is-the-queue-for)
   - [Python API](#python-api)
   - [Configuration](#configuration)
@@ -136,7 +137,7 @@ you can use `idm` or `pyidm`
 
 ```bash
 usage: idm [-h] [-p PATH] [-o OUTPUT] [-c] [-a] [-r REFERRER] [-C COOKIE] [-D POST_DATA] [-U USERNAME] [-P PASSWORD] [-ua USER_AGENT] [-s] [--host HOST] [--port PORT] [--token TOKEN] [-A AGENT]
-           [--agent-token AGENT_TOKEN] [--local] [-w] [--timeout TIMEOUT] [--no-webui] [--no-watcher] [--log-dir LOG_DIR] [-v] [--config CONFIG]
+           [--agent-token AGENT_TOKEN] [--local] [-w] [--timeout TIMEOUT] [--no-webui] [--no-watcher] [--jobs-file JOBS_FILE] [--no-persist] [--log-dir LOG_DIR] [-v] [--config CONFIG]
            [URLS ...]
 
 Command line downloader with/Via Internet Download Manager(IDM)
@@ -173,6 +174,9 @@ Options:
   --timeout TIMEOUT     Max seconds to wait with --wait (default: 3600, 0 = forever)
   --no-webui            Agent server: disable the web interface
   --no-watcher          Agent server: disable IDM log watching (download state tracking)
+  --jobs-file JOBS_FILE
+                        Agent server: where jobs are saved (default: %APPDATA%\pyidm\jobs.json, ~/.pyidm/jobs.json elsewhere)
+  --no-persist          Agent server: keep jobs in memory only (lost on restart)
   --log-dir LOG_DIR     IDM log directory (default: %APPDATA%\IDM\DwnlData\<USERNAME>)
   -v, --verbose         Verbose agent server log
   --config CONFIG       set config, format section:option:value, for list valid section/option type "doc"
@@ -224,7 +228,9 @@ flowchart LR
         UI["Web UI  GET /"]
         Q[("Send queue")]
         W["COM worker thread<br/>IDMan.download()"]
-        J[("Job history<br/>last 200")]
+        J[("Job list<br/>last 200")]
+        JF[("jobs.json<br/>saved on every change")]
+        J <--> JF
         LW["Log watcher thread<br/>tails IDM logs"]
         H -->|"202 queued"| Q
         Q --> W
@@ -246,7 +252,7 @@ flowchart LR
     LOGS -->|"read"| LW
 ```
 
-[![Architecture 2](https://i.ibb.co/Xf1hS1vN/pyidm-architecture13.jpg)](https://i.ibb.co/Xf1hS1vN/pyidm-architecture13.jpg)
+[![Architecture 2](https://i.ibb.co/JjqW6JQ3/pyidm-architecture18.jpg)](https://i.ibb.co/JjqW6JQ3/pyidm-architecture18.jpg)
 
 Request flow, including completion tracking:
 
@@ -314,7 +320,7 @@ curl -X POST http://127.0.0.1:8899/send -H "Content-Type: application/json" -H "
 Open `http://HOST:8899/` in a browser. It is a single embedded page (no external files, no CDN):
 
 - paste one or more links, optional referrer / save path / "add only", press **Send to IDM**;
-- table of the jobs sent through this agent with their live state, downloaded bytes, speed and save-as name;
+- table of the jobs sent through this agent with their live state, downloaded bytes, speed and save-as name, a **x** button per job and **Clear finished**;
 - table of **all** IDM downloads found in IDM's log files (including ones you started in IDM itself);
 - token field (kept in `sessionStorage`) when the agent runs with `--token`;
 - refreshes every 2 seconds; disable with `--no-webui`.
@@ -328,7 +334,7 @@ COM (`SendLinkToIDM2`) only **hands a link over** to IDM, it never reports back.
 | Field | Answers | Source |
 | --- | --- | --- |
 | `status` | was the link handed to IDM? `queued`, `running`, `done`, `failed` | COM call result |
-| `state` | what is IDM doing with it? `sent`, `added`, `downloading`, `connecting`, `finishing`, `complete`, `error`, `cancelled` | IDM log files |
+| `state` | what is IDM doing with it? `sent`, `added`, `downloading`, `connecting`, `finishing`, `complete`, `error`, `cancelled`, `removed`, `interrupted`, `lost` | IDM log files + the downloaded file |
 
 The agent runs a small watcher thread that tails IDM's log files (`%APPDATA%\IDM\DwnlData\<USERNAME>\*.log`, override with `[watcher] log_dir` or `--log-dir`), recognises the progress lines (`Url`, `to file`, `time .., speed .., downl ..`, `Download complete.`, `Rebuilding complete`, `Connecting...`, `Cancel by user.`, ...) and matches each log to a job by URL. Only logs touched in the last 5 minutes are read when the agent starts, so old history does not show up.
 
@@ -345,12 +351,30 @@ stateDiagram-v2
     downloading --> complete
     downloading --> cancelled: "Cancel by user."
     downloading --> error: "last chunk. End rebuilding." without complete
+    downloading --> complete: log deleted and output file exists
+    downloading --> removed: log deleted and no output file
+    error --> removed: job deleted in IDM
+    cancelled --> removed: job deleted in IDM
+    removed --> [*]
+    sent --> interrupted: agent died before the link was confirmed sent
+    sent --> lost: after a restart, no log and no output file
+    interrupted --> [*]
+    lost --> [*]
     cancelled --> downloading: resumed in IDM
     error --> downloading: retried
     complete --> [*]
 ```
 
-[![Architecture 9](https://i.ibb.co/zV6bythZ/pyidm-architecture14.jpg)](https://i.ibb.co/zV6bythZ/pyidm-architecture14.jpg)
+[![Architecture 9](https://files.catbox.moe/s452wp.jpg)](https://files.catbox.moe/s452wp.jpg)
+
+**IDM deletes its log file when a download completes** (and when you delete the job); only paused / error / cancelled downloads keep theirs. So the log can vanish before the last line is read. The watcher handles this instead of guessing:
+
+1. every log it has seen is remembered; if the file disappears, the watcher checks the **file IDM was writing** (the `to file` path from the log; IDM's `name_1.ext` renames in the same folder are accepted too);
+2. output file exists, is not empty and was written after the log was created: `complete`; otherwise the job was deleted in IDM: `removed`;
+3. `complete` and `removed` are final and are remembered by the agent job itself, so the web page does not fall back to `sent` when the log is gone;
+4. tiny downloads where IDM creates and deletes the log between two polls (default poll 0.5 s) are never seen in a log at all; for those the agent probes the expected file (`path` + `output`, or the file name from the url) 3 seconds after sending and reports `complete` if it exists.
+
+Finished jobs (`complete`, `removed`, `failed`, `interrupted`, `lost`) disappear from the job list after `job_ttl` (default 1 hour); remove them earlier with the **Clear finished** / **x** buttons of the web page, `POST /jobs/clear` or `DELETE /jobs/<id>`. This only edits the agent's list, IDM is never touched. Vanished logs stay in `GET /downloads` for 10 minutes.
 
 Notes:
 
@@ -368,6 +392,8 @@ Notes:
 | `POST /add` | yes | add link(s) to IDM queue without starting (forces `add_only`) |
 | `GET /jobs` | yes | jobs sent through this agent, newest first |
 | `GET /jobs/<id>` | yes | one job |
+| `DELETE /jobs/<id>` | yes | remove a job from the agent's list (IDM is not touched) |
+| `POST /jobs/clear` | yes | remove all finished jobs (`complete`, `removed`, `failed`) from the list |
 | `GET /downloads` | yes | every download seen in IDM's log files |
 | `GET /health` | no | `{"status":"ok","version":"...","pending":0,"watcher":true}` |
 
@@ -419,9 +445,43 @@ stateDiagram-v2
     failed --> [*]
 ```
 
-Only the last 200 jobs are kept in memory; history is cleared when the agent stops. `GET /downloads` is rebuilt from IDM's logs, so it survives agent restarts (within the 5 minute start window).
+Only the last 200 jobs are kept and finished ones expire after `job_ttl`. The list survives restarts, see [Job persistence](#job-persistence). `GET /downloads` is rebuilt from IDM's logs, so it survives agent restarts (within the 5 minute start window).
 
 [![Architecture 4](https://i.ibb.co/PsJBsHMq/pyidm-architecture10.jpg)](https://i.ibb.co/PsJBsHMq/pyidm-architecture10.jpg)
+
+### Job persistence
+
+The job list is saved to a JSON file, so a crash, a reboot or `Ctrl+C` does not lose it:
+
+| | |
+| --- | --- |
+| file | `%APPDATA%\pyidm\jobs.json` (Windows), `~/.pyidm/jobs.json` (elsewhere). Change with `--jobs-file` or `[server] jobs_file`, turn off with `--no-persist` or `[server] no_persist`. One agent per file. |
+| written | atomically (temp file + replace) after every change, at least once per second, and on shutdown |
+| contains | id, url, send status, final state, times and the options `path`, `output`, `add_only`. **Never** passwords, user names, cookies, post data or referrer. On POSIX the file is `0600`. |
+| unreadable file | renamed to `jobs.json.bad` and the agent starts with an empty list |
+
+What happens on start:
+
+```mermaid
+flowchart TD
+    A["idm --server starts"] --> B["load jobs.json"]
+    B --> C{"job status in file"}
+    C -- "queued / running" --> D["interrupted<br/>(never resent automatically: IDM may already have it)"]
+    C -- "done, state known" --> E["kept: complete / removed ..."]
+    C -- "done, still downloading" --> F["log watcher re-reads the IDM logs<br/>written since the oldest unfinished job"]
+    F --> G{"log found?"}
+    G -- yes --> H["tracking continues: downloading / complete"]
+    G -- no --> I{"output file exists?"}
+    I -- yes --> J["complete"]
+    I -- no --> K["after 60 s: lost"]
+```
+
+[![Architecture Job Persistence](https://files.catbox.moe/i8v8eg.jpg)](https://files.catbox.moe/i8v8eg.jpg)
+
+
+- downloads that finished while the agent was down become `complete` (the file is on disk, IDM already deleted the log);
+- downloads still running keep their live state, and a paused / error download whose log is older than 5 minutes is found again because the watcher's start window is widened back to the oldest unfinished job;
+- `interrupted` and `lost` are final, they expire after `job_ttl` and can be cleared like the others; resend the link if you still want it.
 
 ### FAQ: what is the queue for?
 
@@ -470,8 +530,12 @@ Config file is `idm.ini` inside the package (change with `idm --config section:o
 | `[debug]` | `verbose` | print "Link sent to IDM successfully." |
 | `[server]` | `host`, `port`, `token` | defaults for `idm --server` (`127.0.0.1`, `8899`, none) |
 | `[server]` | `no_webui` | `1` = disable the web interface (same as `--no-webui`) |
+| `[server]` | `jobs_file` | where jobs are saved (default `%APPDATA%\pyidm\jobs.json`, `~/.pyidm/jobs.json` elsewhere) |
+| `[server]` | `no_persist` | `1` = keep jobs in memory only (same as `--no-persist`) |
+| `[server]` | `job_ttl` | seconds a finished job stays in the list (default `3600`, `0` = until removed) |
 | `[agent]` | `url`, `token` | when `url` is set the CLI always sends to the agent; use `--local` to force local IDM |
 | `[watcher]` | `log_dir` | IDM log directory (default `%APPDATA%\IDM\DwnlData\<USERNAME>`) |
+| `[watcher]` | `interval` | seconds between log scans (default `0.5`) |
 | `[watcher]` | `disable` | `1` = no completion tracking (same as `--no-watcher`) |
 
 Precedence: command line option, then environment `PYIDM_TOKEN` (token only), then `idm.ini`, then built-in default.
@@ -526,11 +590,9 @@ Remove with `schtasks /Delete /TN "pyidm-agent" /F`. The agent must run in the s
 
 `always provide ‘referrer’, some sites must have referrer in header`
 
-## Links
+## License
 
-- License: [GPL](https://github.com/cumulus13/pyidm/blob/master/LICENSE)
-- Code: [https://github.com/cumulus13/pyidm](https://github.com/cumulus13/pyidm)
-- Issue tracker: [https://github.com/cumulus13/pyidm/issues](https://github.com/cumulus13/pyidm/issues)
+[GPL](LICENSE)
 
 ## Author
 

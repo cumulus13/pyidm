@@ -11,6 +11,7 @@
 import collections
 import hmac
 import json
+import os
 import queue
 import socket
 import sys
@@ -20,14 +21,25 @@ import uuid
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 try:
     from .webui import INDEX_HTML
-    from .watcher import is_final, FINAL_STATES
+    from .watcher import is_final, FINAL_STATES, LogWatcher
 except ImportError:  # script mode
     from webui import INDEX_HTML
-    from watcher import is_final, FINAL_STATES
+    from watcher import is_final, FINAL_STATES, LogWatcher
+
+def default_jobs_file():
+    """%APPDATA%\\pyidm\\jobs.json on Windows, ~/.pyidm/jobs.json elsewhere."""
+    appdata = os.getenv('APPDATA')
+    if sys.platform == 'win32' and appdata:
+        return os.path.join(appdata, 'pyidm', 'jobs.json')
+    return os.path.join(os.path.expanduser('~'), '.pyidm', 'jobs.json')
+
+
+# only these request options are written to disk: never passwords, cookies, post data or user names
+PERSIST_OPTS = ('path', 'output', 'add_only')
 
 DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 8899
@@ -115,7 +127,7 @@ class AgentServer(object):
     """HTTP agent. All COM calls are done on ONE worker thread (COM is thread-affine)."""
 
     def __init__(self, downloader, host=DEFAULT_HOST, port=DEFAULT_PORT, token=None,
-                 defaults=None, history=200, verbose=False, watcher=None, webui=True):
+                 defaults=None, history=200, verbose=False, watcher=None, webui=True, job_ttl=3600, jobs_file=None):
         if host not in LOOPBACK and not token:
             raise ValueError('Refusing to listen on %s without a token (use --token or PYIDM_TOKEN)' % host)
         self.downloader = downloader
@@ -127,11 +139,21 @@ class AgentServer(object):
         self.verbose = verbose
         self.watcher = watcher
         self.webui = webui
+        self.job_ttl = job_ttl      # seconds a finished/failed job stays listed (0 = until removed)
         self.queue = queue.Queue()
         self.jobs = collections.OrderedDict()
         self.lock = threading.Lock()
         self.httpd = None
         self.worker = None
+        self.sweeper = None
+        self._stop_evt = threading.Event()
+        self.jobs_file = jobs_file or None          # None = keep jobs in memory only
+        self._dirty = False
+        self._save_lock = threading.Lock()
+        self._started_at = time.time()
+        self.restored = 0
+        if self.jobs_file:
+            self._load()
 
     # ---- jobs -------------------------------------------------------------
     def submit(self, urls, opts):
@@ -139,23 +161,148 @@ class AgentServer(object):
         with self.lock:
             for url in urls:
                 job = {'id': uuid.uuid4().hex[:12], 'url': url, 'opts': opts,
-                       'status': 'queued', 'error': None, 'time': time.time(), 'started': None}
+                       'status': 'queued', 'error': None, 'time': time.time(), 'started': None,
+                       'final': None, 'ended': None}
                 self.jobs[job['id']] = job
                 ids.append(job['id'])
                 self.queue.put(job)
             while len(self.jobs) > self.history:
                 self.jobs.popitem(last=False)
+        self.expire()
+        self.save()
         return ids
+
+    def expire(self):
+        """Drop finished jobs older than job_ttl."""
+        if not self.job_ttl:
+            return
+        now = time.time()
+        with self.lock:
+            gone = [j for j, job in self.jobs.items() if job['ended'] and now - job['ended'] > self.job_ttl]
+            for jid in gone:
+                self.jobs.pop(jid, None)
+            if gone:
+                self._dirty = True
+
+    # ---- persistence ------------------------------------------------------
+    def save(self):
+        """Write the job list atomically (temp file + replace). Never raises."""
+        if not self.jobs_file:
+            return
+        with self._save_lock:
+            with self.lock:
+                self._dirty = False
+                data = {'version': 1, 'saved': time.time(), 'jobs': [
+                    {'id': j['id'], 'url': j['url'], 'status': j['status'], 'error': j['error'],
+                     'time': j['time'], 'started': j['started'], 'final': j['final'], 'ended': j['ended'],
+                     'opts': {k: v for k, v in j['opts'].items() if k in PERSIST_OPTS}}
+                    for j in self.jobs.values()]}
+            tmp = self.jobs_file + '.tmp'
+            try:
+                folder = os.path.dirname(self.jobs_file)
+                if folder and not os.path.isdir(folder):
+                    os.makedirs(folder)
+                with open(tmp, 'w', encoding='utf-8') as fh:
+                    json.dump(data, fh)
+                if os.name == 'posix':
+                    os.chmod(tmp, 0o600)
+                os.replace(tmp, self.jobs_file)
+            except OSError as e:
+                self._dirty = True
+                if self.verbose:
+                    sys.stderr.write('cannot save %s: %s\n' % (self.jobs_file, e))
+
+    def _load(self):
+        try:
+            with open(self.jobs_file, 'r', encoding='utf-8') as fh:
+                data = json.load(fh)
+            items = data['jobs']
+        except FileNotFoundError:
+            return
+        except (OSError, ValueError, KeyError, TypeError):
+            try:                                      # unreadable: keep it for inspection, start clean
+                os.replace(self.jobs_file, self.jobs_file + '.bad')
+            except OSError:
+                pass
+            return
+        now = time.time()
+        for it in items[-self.history:]:
+            try:
+                job = {'id': str(it['id']), 'url': str(it['url']), 'opts': dict(it.get('opts') or {}),
+                       'status': it.get('status') or 'done', 'error': it.get('error'), 'time': float(it.get('time') or now),
+                       'started': it.get('started'), 'final': it.get('final'), 'ended': it.get('ended'),
+                       'restored': now}
+            except (KeyError, TypeError, ValueError):
+                continue
+            if job['status'] in ('queued', 'running'):
+                # the agent died before / while sending: never resend automatically (could download twice)
+                job['status'] = 'interrupted'
+                job['error'] = 'agent stopped before the link was confirmed sent; check IDM, resend if needed'
+                job['ended'] = now
+            self.jobs[job['id']] = job
+        self.restored = len(self.jobs)
+
+    def _unfinished_span(self):
+        """Seconds back to the oldest job whose download is still unresolved (for the watcher's start window)."""
+        now = time.time()
+        starts = [j['started'] for j in self.jobs.values()
+                  if j['status'] == 'done' and not j['final'] and j.get('started')]
+        return int(now - min(starts)) + 60 if starts else 0
+
+    def _sweep(self):
+        """Remember final states while IDM's log is still readable (job_view caches 'complete'/'removed'),
+        and expire old finished jobs, even when nobody is looking at the web page."""
+        while not self._stop_evt.wait(1.0):
+            try:
+                with self.lock:
+                    for job in self.jobs.values():
+                        if job['status'] == 'done' and not job['final']:
+                            before = (job['final'], job['ended'])
+                            view = self.job_view(job)
+                            if (job['final'], job['ended']) != before:
+                                self._dirty = True
+                            elif job.get('restored') and view['download'] is None and not job['ended'] \
+                                    and time.time() - self._started_at > 60:
+                                # restored job, 60 s after start no log and no output file: cannot know
+                                job['final'] = {'state': 'lost', 'speed': None, 'downloaded': None, 'saveas': None,
+                                                'log': None, 'updated': time.time()}
+                                job['ended'] = time.time()
+                                self._dirty = True
+                self.expire()
+                if self._dirty:
+                    self.save()
+            except Exception:
+                pass
 
     def job_view(self, job):
         """status = result of handing the link to IDM; state = what IDM does with it (needs the log watcher)."""
-        download = None
-        if self.watcher is not None and job['status'] == 'done' and job.get('started'):
+        download = job['final']      # 'complete' / 'removed' are remembered: IDM deletes its log files
+        if download is None and self.watcher is not None and job['status'] == 'done' and job.get('started'):
             found = self.watcher.find(job['url'], since=job['started'])
             if found:
                 download = {k: found.get(k) for k in ('state', 'speed', 'downloaded', 'saveas', 'log', 'updated')}
+                if download['state'] in ('complete', 'removed'):
+                    job['final'] = download
+                    job['ended'] = time.time()
+                    self._dirty = True
         add_only = job['opts'].get('add_only', self.defaults.get('add_only', False))
-        if job['status'] == 'failed':
+        if download is None and job['status'] == 'done' and job.get('started') and not add_only \
+                and time.time() - job['started'] > 3:
+            # tiny downloads: IDM may create and delete its log between two polls, so the watcher never
+            # saw it. Fall back to the file on disk (save path + output name or the url's file name).
+            probe = self._probe_output(job)
+            if probe:
+                download = {'state': 'complete', 'speed': None, 'downloaded': probe[1], 'saveas': probe[0],
+                            'log': None, 'updated': time.time()}
+                job['final'] = download
+                job['ended'] = time.time()
+                self._dirty = True
+        if self.watcher is None and job['status'] == 'done' and not job['ended']:
+            job['ended'] = time.time()        # nothing will ever resolve it: let it expire
+            self._dirty = True
+        if job['status'] == 'interrupted':
+            state = 'interrupted'
+        elif job['status'] == 'failed':
             state = 'failed'
         elif job['status'] == 'queued':
             state = 'queued'
@@ -168,10 +315,26 @@ class AgentServer(object):
         return {'id': job['id'], 'url': job['url'], 'status': job['status'], 'state': state,
                 'error': job['error'], 'time': job['time'], 'download': download}
 
+    def _probe_output(self, job):
+        folder = job['opts'].get('path') or self.defaults.get('path')
+        name = job['opts'].get('output') or os.path.basename(unquote(urlparse(job['url']).path))
+        if not folder or not name:
+            return None
+        target = os.path.join(folder, name)
+        if LogWatcher._output_exists({'saveas': target, 'created': job['started']}):
+            try:
+                return target, os.path.getsize(target)
+            except OSError:
+                return target, None
+        return None
+
     def _set(self, job, status, error=None):
         with self.lock:
             job['status'] = status
             job['error'] = error
+            self._dirty = True
+            if status == 'failed':
+                job['ended'] = time.time()
 
     def _run_worker(self):
         com = None
@@ -217,9 +380,16 @@ class AgentServer(object):
             daemon_threads = True
             address_family = socket.AF_INET6 if ':' in self.host else socket.AF_INET
 
+        if self.watcher is not None and not self.watcher._thread:
+            # logs of downloads that were running when the agent stopped must be re-read from the start
+            self.watcher.recent = max(self.watcher.recent, self._unfinished_span())
+            if not self.watcher.start():
+                self.watcher = None
         self.httpd = _Server((self.host, self.port), _make_handler(self))
         self.worker = threading.Thread(target=self._run_worker, name='pyidm-com', daemon=True)
         self.worker.start()
+        self.sweeper = threading.Thread(target=self._sweep, name='pyidm-sweep', daemon=True)
+        self.sweeper.start()
         try:
             self.httpd.serve_forever()
         except KeyboardInterrupt:
@@ -228,6 +398,8 @@ class AgentServer(object):
             self.stop()
 
     def stop(self):
+        self._stop_evt.set()
+        self.save()
         if self.httpd is not None:
             try:
                 self.httpd.server_close()
@@ -311,6 +483,7 @@ def _make_handler(srv):
             if path == '/jobs':
                 with srv.lock:
                     items = [srv.job_view(j) for j in srv.jobs.values()]
+                srv.expire()
                 return self._json(200, {'jobs': items[::-1]})
             if path.startswith('/jobs/'):
                 with srv.lock:
@@ -321,14 +494,34 @@ def _make_handler(srv):
                 return self._json(200, view)
             return self._json(404, {'error': 'not found'})
 
+        def do_DELETE(self):
+            path = urlparse(self.path).path.rstrip('/')
+            if not path.startswith('/jobs/'):
+                return self._json(404, {'error': 'not found'})
+            if not self._authorized():
+                return self._json(401, {'error': 'unauthorized'})
+            with srv.lock:
+                job = srv.jobs.pop(path[6:], None)
+            if job is None:
+                return self._json(404, {'error': 'job not found'})
+            srv.save()
+            return self._json(200, {'removed': job['id']})
+
         def do_POST(self):
             path = urlparse(self.path).path.rstrip('/')
-            if path not in ('/send', '/add'):
+            if path not in ('/send', '/add', '/jobs/clear'):
                 return self._json(404, {'error': 'not found'})
             if not self._authorized():
                 return self._json(401, {'error': 'unauthorized'})
             if (self.headers.get('Content-Type') or '').split(';')[0].strip().lower() != 'application/json':
                 return self._json(415, {'error': 'Content-Type must be application/json'})
+            if path == '/jobs/clear':
+                with srv.lock:
+                    done = [j for j, job in srv.jobs.items() if job['ended']]
+                    for j in done:
+                        srv.jobs.pop(j, None)
+                srv.save()
+                return self._json(200, {'cleared': len(done)})
             try:
                 length = int(self.headers.get('Content-Length') or 0)
             except ValueError:

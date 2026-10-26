@@ -13,11 +13,12 @@ import collections
 import getpass
 import os
 import re
+import stat
 import threading
 import time
 from urllib.parse import unquote
 
-FINAL_STATES = ('complete', 'error', 'cancelled', 'failed')
+FINAL_STATES = ('complete', 'error', 'cancelled', 'failed', 'removed', 'interrupted', 'lost')
 
 RE_URL = re.compile(r'Url ((?:https?|ftp)://\S+)')
 RE_SAVEAS = re.compile(r'to file (.+)')
@@ -56,7 +57,7 @@ def normalize_url(url):
 def is_final(state, stable_for=0.0, grace=10.0):
     """'complete'/'failed' are final at once. 'error'/'cancelled' only when they stayed
     unchanged for `grace` seconds (IDM logs some of those lines during normal retries)."""
-    if state in ('complete', 'failed'):
+    if state in ('complete', 'failed', 'removed', 'interrupted', 'lost'):
         return True
     if state in ('error', 'cancelled'):
         return stable_for >= grace
@@ -66,11 +67,12 @@ def is_final(state, stable_for=0.0, grace=10.0):
 class LogWatcher(object):
     """Background thread that tails IDM log files and keeps one status dict per log file."""
 
-    def __init__(self, log_dir=None, interval=1.0, recent=300, max_items=500):
+    def __init__(self, log_dir=None, interval=0.5, recent=300, max_items=500, keep_finished=600):
         self.log_dir = log_dir or default_log_dir()
         self.interval = interval
         self.recent = recent          # at start only logs touched within N seconds are parsed
         self.max_items = max_items
+        self.keep_finished = keep_finished   # seconds a vanished (finished/removed) log stays listed
         self._items = collections.OrderedDict()   # path -> status
         self._lines = {}                          # path -> deque of recent lines
         self._pos = {}
@@ -109,6 +111,9 @@ class LogWatcher(object):
     # ---- scanning ---------------------------------------------------------
     def scan(self, initial=False):
         now = time.time()
+        if not os.path.isdir(self.log_dir):
+            return
+        seen = set()
         for root, _dirs, files in os.walk(self.log_dir):
             for name in files:
                 if not name.endswith('.log'):
@@ -118,6 +123,13 @@ class LogWatcher(object):
                     st = os.stat(path)
                 except OSError:
                     continue
+                seen.add(path)
+                with self._lock:
+                    old = self._items.get(path)
+                    if old is not None and old['gone']:      # IDM reused the file name: start over
+                        self._items.pop(path, None)
+                        self._lines.pop(path, None)
+                        self._pos.pop(path, None)
                 pos = self._pos.get(path)
                 if pos is None:
                     if initial and now - st.st_mtime > self.recent:
@@ -152,6 +164,62 @@ class LogWatcher(object):
                 self._pos[path] = pos + len(chunk)
                 text = chunk.decode('utf-8', errors='replace').lstrip('\ufeff')
                 self._apply(path, st, text.splitlines())
+        self._reap(now, seen)
+
+    # ---- IDM deletes the log when a download completes (or the job is deleted) ----
+    def _reap(self, now, seen):
+        """Logs that disappeared: decide 'complete' vs 'removed' from the file on disk, then expire old ones."""
+        with self._lock:
+            for path, s in list(self._items.items()):
+                if s['gone']:
+                    if now - (s['finished'] or now) > self.keep_finished:
+                        self._items.pop(path, None)
+                        self._lines.pop(path, None)
+                    continue
+                if path in seen:
+                    continue
+                s['gone'] = True
+                s['finished'] = now
+                s['updated'] = now
+                if s['complete'] or self._output_exists(s):
+                    s['complete'] = True
+                    s['error'] = s['retrying'] = s['cancelled'] = False
+                    s['state'] = 'complete'
+                else:
+                    s['state'] = 'removed'
+                self._pos.pop(path, None)
+                self._lines.pop(path, None)
+                self._history.discard(path)
+
+    @staticmethod
+    def _output_exists(s):
+        """True if the file IDM was writing exists, is non-empty and was written after the log was created.
+        Also accepts IDM's renamed copies (name_1.ext, name (1).ext) in the same folder."""
+        target = s.get('saveas')
+        if not target:
+            return False
+        newer = (s.get('created') or 0) - 5
+
+        def ok(p):
+            try:
+                st = os.stat(p)
+            except OSError:
+                return False
+            return stat.S_ISREG(st.st_mode) and st.st_size > 0 and st.st_mtime >= newer
+
+        if ok(target):
+            return True
+        folder, name = os.path.split(target)
+        stem, ext = os.path.splitext(name)
+        try:
+            names = os.listdir(folder or '.')
+        except OSError:
+            return False
+        for other in names:
+            o_stem, o_ext = os.path.splitext(other)
+            if o_ext.lower() == ext.lower() and o_stem.startswith(stem) and ok(os.path.join(folder, other)):
+                return True
+        return False
 
     def _apply(self, path, st, lines):
         with self._lock:
@@ -160,6 +228,7 @@ class LogWatcher(object):
                 s = {'log': os.path.basename(path), 'url': None, 'saveas': None, 'state': 'unknown',
                      'event': None, 'time': None, 'speed': None, 'downloaded': None,
                      'complete': False, 'error': False, 'cancelled': False, 'retrying': False,
+                     'gone': False, 'finished': None,
                      'created': st.st_ctime, 'updated': st.st_mtime}
                 self._items[path] = s
                 while len(self._items) > self.max_items:

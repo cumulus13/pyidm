@@ -27,10 +27,10 @@ import signal
 import time
 
 try:
-    from .server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT
+    from .server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT, default_jobs_file
     from .watcher import LogWatcher, is_final
 except ImportError:
-    from server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT
+    from server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT, default_jobs_file
     from watcher import LogWatcher, is_final
 
 if str(os.getenv('DEBUG', "0")).lower() in ("1", "true", "ok", "yes", "on"):
@@ -195,7 +195,7 @@ class IDMan(object):
                     out.append(line)
         return out
 
-    def serve(self, host=None, port=None, token=None, verbose=False, webui=True, watcher=True, log_dir=None):
+    def serve(self, host=None, port=None, token=None, verbose=False, webui=True, watcher=True, log_dir=None, jobs_file=None, persist=True):
         try:
             self._require_com()
         except (OSNotSupport, IDMNotFound) as e:
@@ -213,20 +213,33 @@ class IDMan(object):
         }
         log_watcher = None
         if watcher and not self._flag('WATCHER_DISABLE'):
-            log_watcher = LogWatcher(log_dir=log_dir or self._cfg('WATCHER_LOG_DIR'))
-            if not log_watcher.start():
+            try:
+                interval = float(self._cfg('WATCHER_INTERVAL') or 0.5)
+            except (TypeError, ValueError):
+                interval = 0.5
+            log_watcher = LogWatcher(log_dir=log_dir or self._cfg('WATCHER_LOG_DIR'), interval=interval)
+            if not log_watcher.available():       # started by AgentServer.serve() after the saved jobs are restored
                 print(make_colors("IDM log directory not found ({}): download completion tracking is off".format(
                     log_watcher.log_dir or 'unknown'), 'ly'))
                 log_watcher = None
         webui = webui and not self._flag('SERVER_NO_WEBUI')
         try:
-            srv = AgentServer(self, host, port, token, defaults=defaults, verbose=verbose, watcher=log_watcher, webui=webui)
+            try:
+                job_ttl = int(self._cfg('SERVER_JOB_TTL', 3600))
+            except (TypeError, ValueError):
+                job_ttl = 3600
+            jobs_path = None
+            if persist and not self._flag('SERVER_NO_PERSIST'):
+                jobs_path = jobs_file or self._cfg('SERVER_JOBS_FILE') or default_jobs_file()
+            srv = AgentServer(self, host, port, token, defaults=defaults, verbose=verbose, watcher=log_watcher,
+                              webui=webui, job_ttl=job_ttl, jobs_file=jobs_path)
         except ValueError as e:
             sys.exit(make_colors(str(e), 'lw', 'r'))
         print(make_colors("pyidm agent server listening on http://%s:%s (%s) - Ctrl+C to stop" % (
             host, port, "token required" if token else "no token, loopback only"), 'b', 'y'))
-        print(make_colors("web ui: %s | completion tracking: %s" % (
-            "/" if webui else "off", "on" if log_watcher else "off"), 'lc'))
+        print(make_colors("web ui: %s | completion tracking: %s | jobs file: %s%s" % (
+            "/" if webui else "off", "on" if log_watcher else "off", jobs_path or "off (memory only)",
+            " (%d job(s) restored)" % srv.restored if jobs_path else ""), 'lc'))
         try:
             srv.serve()
         finally:
@@ -341,6 +354,8 @@ class IDMan(object):
         parse.add_argument('--timeout', help='Max seconds to wait with --wait (default: 3600, 0 = forever)', action='store', type=int, default=3600)
         parse.add_argument('--no-webui', help='Agent server: disable the web interface', action='store_true')
         parse.add_argument('--no-watcher', help='Agent server: disable IDM log watching (download state tracking)', action='store_true')
+        parse.add_argument('--jobs-file', help='Agent server: where jobs are saved (default: %%APPDATA%%\\pyidm\\jobs.json, ~/.pyidm/jobs.json elsewhere)', action='store')
+        parse.add_argument('--no-persist', help='Agent server: keep jobs in memory only (lost on restart)', action='store_true')
         parse.add_argument('--log-dir', help='IDM log directory (default: %%APPDATA%%\\IDM\\DwnlData\\<USERNAME>)', action='store')
         parse.add_argument('-v', '--verbose', help='Verbose agent server log', action='store_true')
         parse.add_argument('--config',  help = 'set config, format section:option:value, for list valid section/option type "doc"', action = 'store')
@@ -373,7 +388,7 @@ class IDMan(object):
             if args.config == 'doc':
                 self.docs()
             elif args.server:
-                self.serve(args.host, args.port, args.token, args.verbose, not args.no_webui, not args.no_watcher, args.log_dir)
+                self.serve(args.host, args.port, args.token, args.verbose, not args.no_webui, not args.no_watcher, args.log_dir, args.jobs_file, not args.no_persist)
             else:
                 urls = self.expand_urls(args.URLS)
                 agent = None if args.local else (args.agent or self._cfg('AGENT_URL'))

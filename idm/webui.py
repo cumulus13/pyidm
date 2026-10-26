@@ -20,7 +20,7 @@ th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertic
 td.n{max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mut{color:var(--mut)}#msg{color:var(--bad);min-height:1.2em}
 .b{padding:1px 8px;border-radius:10px;border:1px solid var(--line);font-size:12px}
-.s-complete{color:var(--ok);border-color:var(--ok)}.s-error,.s-failed,.s-cancelled{color:var(--bad);border-color:var(--bad)}
+.s-complete{color:var(--ok);border-color:var(--ok)}.s-removed,.s-lost{color:var(--mut)}.s-interrupted{color:var(--warn);border-color:var(--warn)}.s-error,.s-failed,.s-cancelled{color:var(--bad);border-color:var(--bad)}
 .s-downloading,.s-connecting,.s-finishing,.s-sending{color:var(--acc);border-color:var(--acc)}.s-queued,.s-added,.s-sent{color:var(--warn);border-color:var(--warn)}
 </style></head><body><main>
 <h1>pyidm agent <span class="mut" id="info"></span></h1>
@@ -30,8 +30,8 @@ td.n{max-width:380px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 <input id="referrer" type="text" placeholder="referrer (optional)"><input id="path" type="text" placeholder="save path on agent (optional)">
 <label><input id="addonly" type="checkbox"> add only (do not start)</label><button class="p">Send to IDM</button></form>
 <div id="msg"></div>
-<h2>Jobs sent through this agent</h2>
-<table><thead><tr><th>Link</th><th>State</th><th>Downloaded</th><th>Speed</th><th>Save as</th></tr></thead><tbody id="jobs"></tbody></table>
+<h2>Jobs sent through this agent <button id="clear" type="button">Clear finished</button></h2>
+<table><thead><tr><th>Link</th><th>State</th><th>Downloaded</th><th>Speed</th><th>Save as</th><th></th></tr></thead><tbody id="jobs"></tbody></table>
 <h2>All IDM downloads <span class="mut">(from IDM log files)</span></h2>
 <table><thead><tr><th>Link</th><th>State</th><th>Downloaded</th><th>Speed</th><th>Save as</th></tr></thead><tbody id="dls"></tbody></table>
 <script>
@@ -42,11 +42,15 @@ const r=await fetch(p,{method:m,headers:h,body:b?JSON.stringify(b):undefined});c
 if(!r.ok)throw new Error((d&&d.error)||r.statusText);return d}
 function cell(tr,text,cls){const td=document.createElement('td');td.textContent=text;if(cls)td.className=cls;tr.appendChild(td);return td}
 function badge(tr,state){const td=document.createElement('td');const s=document.createElement('span');s.className='b s-'+String(state).replace(/[^a-z]/g,'');s.textContent=state;td.appendChild(s);tr.appendChild(td)}
-function fill(id,rows){const body=$(id);body.replaceChildren();for(const x of rows){const tr=document.createElement('tr');const d=x.download||x;
-cell(tr,x.url||'-','n').title=x.url||'';badge(tr,x.state);cell(tr,fmt(d.downloaded));cell(tr,d.speed!=null?fmt(d.speed)+'/s':'-','mut');cell(tr,d.saveas||'-','n mut');body.appendChild(tr)}}
+function fill(id,rows,del){const body=$(id);body.replaceChildren();for(const x of rows){const tr=document.createElement('tr');const d=x.download||x;
+cell(tr,x.url||'-','n').title=x.url||'';badge(tr,x.state);cell(tr,fmt(d.downloaded));cell(tr,d.speed!=null?fmt(d.speed)+'/s':'-','mut');cell(tr,d.saveas||'-','n mut');
+if(del){const td=document.createElement('td');const b=document.createElement('button');b.textContent='x';b.title='remove from this list (IDM is not touched)';
+b.onclick=async()=>{try{await api('DELETE','/jobs/'+encodeURIComponent(x.id));refresh()}catch(e){$('msg').textContent=e.message}};td.appendChild(b);tr.appendChild(td)}
+body.appendChild(tr)}}
 async function refresh(){try{const[h,j,d]=await Promise.all([api('GET','/health'),api('GET','/jobs'),api('GET','/downloads')]);
 $('info').textContent='v'+(h.version||'?')+' - pending '+h.pending+' - IDM log watcher '+(h.watcher?'on':'off');$('msg').textContent='';
-fill('jobs',j.jobs);fill('dls',d.downloads)}catch(e){$('msg').textContent=e.message}}
+fill('jobs',j.jobs,true);fill('dls',d.downloads)}catch(e){$('msg').textContent=e.message}}
+$('clear').onclick=async()=>{try{await api('POST','/jobs/clear',{});refresh()}catch(e){$('msg').textContent=e.message}};
 $('save').onclick=()=>{token=$('token').value.trim();sessionStorage.setItem('pyidm-token',token);refresh()};
 $('add').onsubmit=async e=>{e.preventDefault();const urls=$('urls').value.split('\n').map(s=>s.trim()).filter(Boolean);const b={urls};
 if($('referrer').value.trim())b.referrer=$('referrer').value.trim();if($('path').value.trim())b.path=$('path').value.trim();if($('addonly').checked)b.add_only=true;
