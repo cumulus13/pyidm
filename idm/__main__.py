@@ -11,3 +11,6 @@ from . import idm
 def usage():
 	c = idm.IDMan()
 	c.usage()
+
+if __name__ == "__main__":
+	usage()

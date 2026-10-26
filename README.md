@@ -42,35 +42,33 @@ Install and update using [pip](https://pip.pypa.io/en/stable/quickstart/):
 pip install idm
 ```
 
-Requires Python 3.7+. There are two install types and pip picks the right one for the OS:
+Requires Python 3.7+. `pip install idm` detects the OS by itself, you never have to pick packages by hand:
 
-| | Windows | Linux / macOS / other |
+| Command | Windows | Linux / macOS / other |
 | --- | --- | --- |
-| `pip install idm` (default, everything) | agent server + COM + client; also installs `comtypes` and `pywin32` | **agent client only** (no COM packages are installed, they are Windows-only markers) |
-| `idm-agent` (agent only, built with `PYIDM_AGENT_ONLY=1`) | client only, never installs `comtypes`/`pywin32` | client only |
+| `pip install idm` | **everything**: agent client + agent server + COM (also installs `comtypes`, `pywin32`) | **agent client only**; Windows-only packages are skipped, install never fails |
+| `pip install "idm[agent]"` | agent client (portable) | agent client (portable) |
+| `pip install "idm[com]"` | adds `comtypes` | ignored |
+| `pip install "idm[win]"` | adds `comtypes` + `pywin32` | ignored |
+| `pip install "idm[all]"` | everything | agent client only |
+| `pip install idm-agent` | agent client only, never installs COM packages | agent client only |
 
 ```mermaid
 flowchart TD
     A["pip install idm"] --> B{"Windows ?"}
-    B -- yes --> C["Install: envdot, make_colors, clipboard, ...<br/>+ comtypes + pywin32"]
-    B -- no --> D["Install: envdot, make_colors, clipboard, ...<br/>(no comtypes / pywin32)"]
+    B -- yes --> C["envdot, make_colors, clipboard, ...<br/>+ comtypes + pywin32"]
+    B -- no --> D["envdot, make_colors, clipboard, ...<br/>(comtypes / pywin32 skipped)"]
     C --> E["Full: idm --server, local IDM via COM,<br/>idm -A client"]
-    D --> F["Agent client only: idm -A http://HOST:8899 URL"]
+    D --> F["Agent client: idm -A http://HOST:8899 URL"]
     F -. "idm --server / local download" .-> G["Clear message:<br/>'Local IDM (COM) is only available on Windows'"]
 ```
 
-[![Architecture 5](https://i.ibb.co/pvwNTs50/pyidm-architecture11.jpg)](https://i.ibb.co/pvwNTs50/pyidm-architecture11.jpg)
+[![Architecture](https://i.ibb.co/rfRjzwdK/pyidm-architecture11.jpg)](https://i.ibb.co/rfRjzwdK/pyidm-architecture11.jpg)
 
-On non-Windows systems `import idm` works and `idm -A ...` works; `idm --server` and local downloads print a clear message and exit with code 1 instead of crashing.
+On non-Windows systems `import idm` and `idm -A ...` work; `idm --server` and local downloads print a clear message and exit with code 1 instead of crashing.
+The Windows-only packages are declared with environment markers (`sys_platform == "win32"`), so `idm[com]`, `idm[win]` and `idm[all]` are harmless on other systems too.
 
-Agent-only build (for example a Windows PC that only forwards links to another PC):
-
-```bash
-set PYIDM_AGENT_ONLY=1        # Linux/macOS: export PYIDM_AGENT_ONLY=1
-pip wheel . --no-deps -w dist # builds idm_agent-*.whl, then: pip install dist/idm_agent-*.whl
-```
-
-`idm` and `idm-agent` install the same `idm` package, install only one of them. On a Windows machine that was installed agent-only you can add the COM packages later with `pip install comtypes pywin32`.
+`idm[agent]` is portable-only metadata; plain `pip install idm` on Windows still adds the COM packages (that is the auto-detect). If a Windows machine must never get them (it only forwards links to another PC) use the separate `idm-agent` distribution (same package, built with `PYIDM_AGENT_ONLY=1 python -m build`). Install only one of `idm` / `idm-agent`.
 
 ## Example
 
@@ -509,7 +507,7 @@ Remove with `schtasks /Delete /TN "pyidm-agent" /F`. The agent must run in the s
 | Problem | Fix |
 | --- | --- |
 | `Local IDM (COM) is only available on Windows` | you are not on Windows: use `idm -A http://HOST:8899 URL` |
-| `COM support is not installed` | `pip install comtypes pywin32` (agent-only install on Windows) |
+| `COM support is not installed` | `pip install "idm[win]"` (or `idm[com]`); happens after `idm-agent` was installed on Windows |
 | `Cannot reach agent server` | agent not running, wrong host/port, or firewall (allow the port in Windows Firewall) |
 | `HTTP 401: unauthorized` | token mismatch; pass `--agent-token`/`PYIDM_TOKEN`, or the request came from another site / Host |
 | `Refusing to listen on ... without a token` | add `--token` when using a non-loopback `--host` |
