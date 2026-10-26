@@ -22,6 +22,13 @@ import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
+try:
+    from .webui import INDEX_HTML
+    from .watcher import is_final, FINAL_STATES
+except ImportError:  # script mode
+    from webui import INDEX_HTML
+    from watcher import is_final, FINAL_STATES
+
 DEFAULT_HOST = '127.0.0.1'
 DEFAULT_PORT = 8899
 MAX_BODY = 1024 * 1024
@@ -108,7 +115,7 @@ class AgentServer(object):
     """HTTP agent. All COM calls are done on ONE worker thread (COM is thread-affine)."""
 
     def __init__(self, downloader, host=DEFAULT_HOST, port=DEFAULT_PORT, token=None,
-                 defaults=None, history=200, verbose=False):
+                 defaults=None, history=200, verbose=False, watcher=None, webui=True):
         if host not in LOOPBACK and not token:
             raise ValueError('Refusing to listen on %s without a token (use --token or PYIDM_TOKEN)' % host)
         self.downloader = downloader
@@ -118,6 +125,8 @@ class AgentServer(object):
         self.defaults = {k: v for k, v in (defaults or {}).items() if v not in (None, '')}
         self.history = history
         self.verbose = verbose
+        self.watcher = watcher
+        self.webui = webui
         self.queue = queue.Queue()
         self.jobs = collections.OrderedDict()
         self.lock = threading.Lock()
@@ -130,7 +139,7 @@ class AgentServer(object):
         with self.lock:
             for url in urls:
                 job = {'id': uuid.uuid4().hex[:12], 'url': url, 'opts': opts,
-                       'status': 'queued', 'error': None, 'time': time.time()}
+                       'status': 'queued', 'error': None, 'time': time.time(), 'started': None}
                 self.jobs[job['id']] = job
                 ids.append(job['id'])
                 self.queue.put(job)
@@ -139,8 +148,25 @@ class AgentServer(object):
         return ids
 
     def job_view(self, job):
-        return {'id': job['id'], 'url': job['url'], 'status': job['status'],
-                'error': job['error'], 'time': job['time']}
+        """status = result of handing the link to IDM; state = what IDM does with it (needs the log watcher)."""
+        download = None
+        if self.watcher is not None and job['status'] == 'done' and job.get('started'):
+            found = self.watcher.find(job['url'], since=job['started'])
+            if found:
+                download = {k: found.get(k) for k in ('state', 'speed', 'downloaded', 'saveas', 'log', 'updated')}
+        add_only = job['opts'].get('add_only', self.defaults.get('add_only', False))
+        if job['status'] == 'failed':
+            state = 'failed'
+        elif job['status'] == 'queued':
+            state = 'queued'
+        elif job['status'] == 'running':
+            state = 'sending'
+        elif download and download['state'] != 'unknown':
+            state = download['state']
+        else:
+            state = 'added' if add_only else 'sent'
+        return {'id': job['id'], 'url': job['url'], 'status': job['status'], 'state': state,
+                'error': job['error'], 'time': job['time'], 'download': download}
 
     def _set(self, job, status, error=None):
         with self.lock:
@@ -160,6 +186,7 @@ class AgentServer(object):
                 job = self.queue.get()
                 if job is None:
                     break
+                job['started'] = time.time()
                 self._set(job, 'running')
                 kwargs = {}
                 merged = dict(self.defaults)
@@ -228,6 +255,21 @@ def _make_handler(srv):
             self.send_header('Content-Type', 'application/json; charset=utf-8')
             self.send_header('Content-Length', str(len(body)))
             self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _html(self, text):
+            body = text.encode('utf-8')
+            self.send_response(200)
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.send_header('X-Content-Type-Options', 'nosniff')
+            self.send_header('X-Frame-Options', 'DENY')
+            self.send_header('Content-Security-Policy',
+                             "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; "
+                             "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
             self.end_headers()
             self.wfile.write(body)
 
@@ -238,22 +280,34 @@ def _make_handler(srv):
                 if auth.lower().startswith('bearer '):
                     got = auth[7:].strip()
                 return hmac.compare_digest(got.encode('utf-8'), srv.token.encode('utf-8'))
-            # No token (loopback only): block browsers / DNS rebinding
-            if self.headers.get('Origin'):
+            # No token (loopback only): block DNS rebinding (Host) and cross-site pages (Origin)
+            host_header = (self.headers.get('Host') or '').lower()
+            origin = self.headers.get('Origin')
+            if origin and urlparse(origin).netloc.lower() != host_header:
                 return False
-            host = (self.headers.get('Host') or '').rsplit(':', 1)[0].strip('[]').lower()
-            return host in LOOPBACK
+            return host_header.rsplit(':', 1)[0].strip('[]') in LOOPBACK
 
         def do_GET(self):
             path = urlparse(self.path).path.rstrip('/') or '/'
+            if path in ('/', '/ui') and srv.webui:
+                return self._html(INDEX_HTML)
             if path == '/health':
                 try:
                     from . import __version__ as ver
+                    ver = getattr(ver, 'version', None)
                 except Exception:
                     ver = None
-                return self._json(200, {'status': 'ok', 'version': ver, 'pending': srv.queue.qsize()})
+                return self._json(200, {'status': 'ok', 'version': ver, 'pending': srv.queue.qsize(),
+                                        'watcher': bool(srv.watcher and srv.watcher.available())})
             if not self._authorized():
                 return self._json(401, {'error': 'unauthorized'})
+            if path == '/downloads':
+                items = srv.watcher.snapshot() if srv.watcher else []
+                for item in items:
+                    item['downloaded'] = item.get('downloaded')
+                return self._json(200, {'watcher': bool(srv.watcher), 'downloads': [
+                    {'url': i['url'], 'state': i['state'], 'speed': i['speed'], 'downloaded': i['downloaded'],
+                     'saveas': i['saveas'], 'log': i['log'], 'updated': i['updated']} for i in items]})
             if path == '/jobs':
                 with srv.lock:
                     items = [srv.job_view(j) for j in srv.jobs.values()]
@@ -295,18 +349,15 @@ def _make_handler(srv):
 
 
 # ---- client ---------------------------------------------------------------
-def send(agent, urls, opts=None, token=None, endpoint='/send', timeout=10):
-    """POST links to an agent server. `opts` keys: see FIELD_MAP. Returns decoded JSON."""
+def _request(method, agent, path, payload=None, token=None, timeout=10):
     if '://' not in agent:
         agent = 'http://' + agent
-    payload = {k: v for k, v in (opts or {}).items() if k in FIELD_MAP and v is not None and v != ''}
-    payload['urls'] = list(urls)
-    req = urllib.request.Request(
-        agent.rstrip('/') + endpoint,
-        data=json.dumps(payload).encode('utf-8'),
-        method='POST',
-        headers={'Content-Type': 'application/json'},
-    )
+    data = None
+    headers = {}
+    if payload is not None:
+        data = json.dumps(payload).encode('utf-8')
+        headers['Content-Type'] = 'application/json'
+    req = urllib.request.Request(agent.rstrip('/') + path, data=data, method=method, headers=headers)
     if token:
         req.add_header('X-Token', token)
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
@@ -321,3 +372,42 @@ def send(agent, urls, opts=None, token=None, endpoint='/send', timeout=10):
         raise AgentError('Agent server replied HTTP %s: %s' % (e.code, msg))
     except (urllib.error.URLError, socket.timeout, OSError) as e:
         raise AgentError('Cannot reach agent server %s: %s' % (agent, getattr(e, 'reason', e)))
+
+
+def send(agent, urls, opts=None, token=None, endpoint='/send', timeout=10):
+    """POST links to an agent server. `opts` keys: see FIELD_MAP. Returns decoded JSON."""
+    payload = {k: v for k, v in (opts or {}).items() if k in FIELD_MAP and v is not None and v != ''}
+    payload['urls'] = list(urls)
+    return _request('POST', agent, endpoint, payload, token, timeout)
+
+
+def get(agent, path, token=None, timeout=10):
+    return _request('GET', agent, path, None, token, timeout)
+
+
+def wait_jobs(agent, ids, token=None, timeout=3600, interval=2.0, grace=10.0, on_change=None):
+    """Poll the agent until every job is final. Returns (views_by_id, tracked).
+    tracked is False when the agent has no IDM log watcher (completion cannot be known)."""
+    tracked = bool(get(agent, '/health', token).get('watcher'))
+    deadline = time.time() + timeout if timeout else None
+    pending, final, seen = list(ids), {}, {}
+    while pending:
+        for jid in list(pending):
+            view = get(agent, '/jobs/' + jid, token)
+            final[jid] = view
+            dl = view.get('download') or {}
+            sig = (view['state'], dl.get('downloaded'))
+            if seen.get(jid, (None,))[0] != sig:
+                prev = seen.get(jid)
+                seen[jid] = (sig, time.time() if (prev is None or prev[0][0] != sig[0]) else prev[1])
+                if on_change:
+                    on_change(view)
+            if not tracked and view['state'] in ('sent', 'added'):
+                pending.remove(jid)
+            elif is_final(view['state'], time.time() - seen[jid][1], grace):
+                pending.remove(jid)
+        if pending:
+            if deadline and time.time() > deadline:
+                break
+            time.sleep(interval)
+    return final, tracked

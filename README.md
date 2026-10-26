@@ -1,15 +1,19 @@
 # idm
 
-Downloader with Internet Download Manager (Windows)
+Downloader with Internet Download Manager (Windows), with an HTTP **agent server**, a **web interface** and **download completion tracking**. Links can be sent to IDM from any OS.
 
+- [Features](#features)
 - [Installing](#installing)
 - [Example](#example)
 - [Command line usage](#command-line-usage)
 - [Agent server mode](#agent-server-mode)
   - [Architecture](#architecture)
   - [Quick start](#quick-start)
+  - [Web interface](#web-interface)
+  - [Download completion tracking](#download-completion-tracking)
   - [HTTP API](#http-api)
   - [Job lifecycle](#job-lifecycle)
+  - [FAQ: what is the queue for?](#faq-what-is-the-queue-for)
   - [Python API](#python-api)
   - [Configuration](#configuration)
   - [Security](#security)
@@ -20,6 +24,16 @@ Downloader with Internet Download Manager (Windows)
 - [Links](#links)
 - [Author](#author)
 
+## Features
+
+- Send links to IDM from Python or the command line (referrer, cookies, post data, credentials, user agent, save path, add-only).
+- **Agent server** (`idm --server`): receive links over HTTP/JSON and forward them to IDM through COM.
+- **Agent client** (`idm -A`): send links to an agent from Windows, Linux, macOS or anywhere Python 3.7+ runs.
+- **Web interface** served by the agent at `/`: add links, watch every IDM download.
+- **Completion tracking**: knows if a download is still running, complete, failed or cancelled (reads IDM's own log files). `idm -w` waits for it.
+- Token authentication, same-origin/CSRF/DNS-rebinding protection, loopback-only by default.
+- Standard library only for the server, client and web UI.
+
 ## Installing
 
 Install and update using [pip](https://pip.pypa.io/en/stable/quickstart/):
@@ -28,7 +42,35 @@ Install and update using [pip](https://pip.pypa.io/en/stable/quickstart/):
 pip install idm
 ```
 
-Requires Python 3.7+ on Windows with Internet Download Manager installed.
+Requires Python 3.7+. There are two install types and pip picks the right one for the OS:
+
+| | Windows | Linux / macOS / other |
+| --- | --- | --- |
+| `pip install idm` (default, everything) | agent server + COM + client; also installs `comtypes` and `pywin32` | **agent client only** (no COM packages are installed, they are Windows-only markers) |
+| `idm-agent` (agent only, built with `PYIDM_AGENT_ONLY=1`) | client only, never installs `comtypes`/`pywin32` | client only |
+
+```mermaid
+flowchart TD
+    A["pip install idm"] --> B{"Windows ?"}
+    B -- yes --> C["Install: envdot, make_colors, clipboard, ...<br/>+ comtypes + pywin32"]
+    B -- no --> D["Install: envdot, make_colors, clipboard, ...<br/>(no comtypes / pywin32)"]
+    C --> E["Full: idm --server, local IDM via COM,<br/>idm -A client"]
+    D --> F["Agent client only: idm -A http://HOST:8899 URL"]
+    F -. "idm --server / local download" .-> G["Clear message:<br/>'Local IDM (COM) is only available on Windows'"]
+```
+
+[![Architecture 5](https://i.ibb.co/pvwNTs50/pyidm-architecture11.jpg)](https://i.ibb.co/pvwNTs50/pyidm-architecture11.jpg)
+
+On non-Windows systems `import idm` works and `idm -A ...` works; `idm --server` and local downloads print a clear message and exit with code 1 instead of crashing.
+
+Agent-only build (for example a Windows PC that only forwards links to another PC):
+
+```bash
+set PYIDM_AGENT_ONLY=1        # Linux/macOS: export PYIDM_AGENT_ONLY=1
+pip wheel . --no-deps -w dist # builds idm_agent-*.whl, then: pip install dist/idm_agent-*.whl
+```
+
+`idm` and `idm-agent` install the same `idm` package, install only one of them. On a Windows machine that was installed agent-only you can add the COM packages later with `pip install comtypes pywin32`.
 
 ## Example
 
@@ -57,6 +99,7 @@ downloader.download(url, r"c:\DOWNLOADS", "test_output.exe", add_only=True)
 ```
 
 `download()` returns `True` when IDM accepted the link, `False` otherwise (the reason is in `downloader.last_error`).
+`IDMan()` itself never fails; `download()` raises `OSNotSupport` (not Windows / `comtypes` missing) or `IDMNotFound` (IDM not installed).
 
 or run on terminal/cmd
 
@@ -94,8 +137,8 @@ downloader.download(url, r"c:\DOWNLOADS", "test_output.exe", "http://test.com/te
 you can use `idm` or `pyidm`
 
 ```bash
-Usage: idm/pyidm [-h] [-p PATH] [-o OUTPUT] [-c] [-a] [-r REFERRER] [-C COOKIE] [-D POST_DATA] [-U USERNAME] [-P PASSWORD] [-ua USER_AGENT] [-s] [--host HOST] [--port PORT] [--token TOKEN] [-A AGENT] [--agent-token AGENT_TOKEN]
-           [--local] [-v] [--config CONFIG]
+usage: idm [-h] [-p PATH] [-o OUTPUT] [-c] [-a] [-r REFERRER] [-C COOKIE] [-D POST_DATA] [-U USERNAME] [-P PASSWORD] [-ua USER_AGENT] [-s] [--host HOST] [--port PORT] [--token TOKEN] [-A AGENT]
+           [--agent-token AGENT_TOKEN] [--local] [-w] [--timeout TIMEOUT] [--no-webui] [--no-watcher] [--log-dir LOG_DIR] [-v] [--config CONFIG]
            [URLS ...]
 
 Command line downloader with/Via Internet Download Manager(IDM)
@@ -128,6 +171,11 @@ Options:
   --agent-token AGENT_TOKEN
                         Token for the agent server (or env PYIDM_TOKEN)
   --local               Ignore configured agent url, send to local IDM
+  -w, --wait            Wait until the download is complete (needs the IDM log watcher), exit code 2 on error/cancel/timeout
+  --timeout TIMEOUT     Max seconds to wait with --wait (default: 3600, 0 = forever)
+  --no-webui            Agent server: disable the web interface
+  --no-watcher          Agent server: disable IDM log watching (download state tracking)
+  --log-dir LOG_DIR     IDM log directory (default: %APPDATA%\IDM\DwnlData\<USERNAME>)
   -v, --verbose         Verbose agent server log
   --config CONFIG       set config, format section:option:value, for list valid section/option type "doc"
 ```
@@ -137,83 +185,104 @@ How the CLI decides where a link goes:
 ```mermaid
 flowchart TD
     A["idm [options] URLS"] --> B{"--server ?"}
-    B -- yes --> S["Start agent server<br/>(listen, queue, forward to COM)"]
+    B -- yes --> W{"Windows + COM + IDM ?"}
+    W -- no --> X["message + exit 1"]
+    W -- yes --> S["Start agent server<br/>(HTTP, queue, COM worker, web UI, log watcher)"]
     B -- no --> C["Expand URLS<br/>'c' = clipboard, file = one link per line"]
     C --> D{"--local ?"}
-    D -- yes --> L["IDMan.download() via COM"]
+    D -- yes --> L
     D -- no --> E{"--agent or<br/>[agent] url set ?"}
     E -- yes --> G["POST /send to agent server"]
-    E -- no --> L
-    L --> IDM[("Internet Download Manager")]
-    G --> R["Agent server"] --> IDM
-    S --> IDM
+    E -- no --> L{"Windows + COM + IDM ?"}
+    L -- no --> X
+    L -- yes --> LD["IDMan.download() via COM"]
+    G --> WT{"--wait ?"}
+    LD --> WT
+    WT -- yes --> TR["Poll agent (or local log watcher)<br/>until complete / error / cancelled"]
+    WT -- no --> END["done"]
+    TR --> END
 ```
 
-[![Architecture 1](https://i.ibb.co/8DvQ2KbX/pyidm-architecture1.jpg)](https://i.ibb.co/8DvQ2KbX/pyidm-architecture1.jpg)
+[![Architecture 1](https://i.ibb.co/Jw56tYxF/pyidm-architecture12.jpg)](https://i.ibb.co/Jw56tYxF/pyidm-architecture12.jpg)
 
 ## Agent server mode
 
-Run `idm` as a small HTTP agent. Any client (another PC, a script, `curl`, a browser extension) sends links to it,
-and the agent forwards them to IDM through COM. Requests are queued and executed one by one on a single COM worker thread.
-No extra dependency is needed (Python standard library only).
+Run `idm` as a small HTTP agent on the Windows machine where IDM is installed. Any client (another PC, a script, `curl`, a browser extension, or the built-in web page) sends links to it, the agent forwards them to IDM through COM and then tells you what IDM did with them.
+Requests go through a queue and are executed one by one on a single COM worker thread. No extra dependency is needed (Python standard library only).
 
 ### Architecture
 
 ```mermaid
 flowchart LR
     subgraph Clients
-        C1["idm -A (CLI)"]
+        C1["idm -A (CLI, any OS)"]
         C2["curl / script"]
-        C3["Browser extension"]
+        C3["Browser: web interface"]
         C4["Other PC on LAN"]
     end
 
-    subgraph Agent["pyidm agent  (idm --server)"]
+    subgraph Agent["pyidm agent  (idm --server, Windows)"]
         H["HTTP handler<br/>auth + validation"]
-        Q[("Job queue")]
+        UI["Web UI  GET /"]
+        Q[("Send queue")]
         W["COM worker thread<br/>IDMan.download()"]
         J[("Job history<br/>last 200")]
+        LW["Log watcher thread<br/>tails IDM logs"]
         H -->|"202 queued"| Q
         Q --> W
-        W -->|"done / failed"| J
-        H -. "GET /jobs" .-> J
+        W -->|"sent / failed"| J
+        H -. "GET /jobs, /downloads" .-> J
+        LW -->|"state per download"| J
+        H --- UI
     end
 
-    IDM[("Internet Download Manager<br/>CIDMLinkTransmitter COM")]
+    IDM[("Internet Download Manager")]
+    LOGS[("IDM log files<br/>%APPDATA%\IDM\DwnlData\USER")]
 
     C1 -->|"POST /send"| H
     C2 -->|"POST /add"| H
-    C3 -->|"POST /send"| H
+    C3 -->|"same-origin fetch"| H
     C4 -->|"POST /send + token"| H
-    W -->|"SendLinkToIDM2"| IDM
+    W -->|"SendLinkToIDM2 (COM)"| IDM
+    IDM -->|"writes"| LOGS
+    LOGS -->|"read"| LW
 ```
 
-[![Architecture 2](https://i.ibb.co/B5P2J6D8/pyidm-architecture2.jpg)](https://i.ibb.co/B5P2J6D8/pyidm-architecture2.jpg)
+[![Architecture 2](https://i.ibb.co/Xf1hS1vN/pyidm-architecture13.jpg)](https://i.ibb.co/Xf1hS1vN/pyidm-architecture13.jpg)
 
-Request flow:
+Request flow, including completion tracking:
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Client as Client (idm -A / curl)
+    participant Client as Client (idm -A -w / web UI)
     participant HTTP as Agent HTTP handler
-    participant Queue as Job queue
+    participant Queue as Send queue
     participant Worker as COM worker
     participant IDM as IDM (COM)
+    participant Log as IDM log files
+    participant Watch as Log watcher
 
-    Client->>HTTP: POST /send {urls, referrer, ...} + X-Token
-    HTTP->>HTTP: check token, content-type, validate urls
+    Client->>HTTP: POST /send {urls, referrer, ...} + token
+    HTTP->>HTTP: check token/origin, content-type, validate urls
     HTTP->>Queue: enqueue one job per url
     HTTP-->>Client: 202 {queued: N, jobs: [ids]}
     Queue->>Worker: next job
     Worker->>IDM: SendLinkToIDM2(link, referrer, cookie, ...)
     IDM-->>Worker: ok / COM error
-    Worker->>Worker: job = done / failed
-    Client->>HTTP: GET /jobs/ID (optional)
-    HTTP-->>Client: {status: done}
+    IDM->>Log: Adding file / Url / time, speed, downl ...
+    Watch->>Log: tail new lines (every 1 s)
+    Watch->>Watch: update state: added, downloading, complete ...
+    loop until final state
+        Client->>HTTP: GET /jobs/ID
+        HTTP-->>Client: {status: done, state: downloading, download: {...}}
+    end
+    IDM->>Log: Download complete. / Rebuilding complete
+    Client->>HTTP: GET /jobs/ID
+    HTTP-->>Client: {state: complete}
 ```
 
-[![Architecture 3](https://i.ibb.co/ds0Qtw1B/pyidm-architecture3.jpg)](https://i.ibb.co/ds0Qtw1B/pyidm-architecture3.jpg)
+[![Architecture 3](https://i.ibb.co/G3k5sn0G/pyidm-architecture8.jpg)](https://i.ibb.co/G3k5sn0G/pyidm-architecture8.jpg)
 
 ### Quick start
 
@@ -223,14 +292,16 @@ Start the agent (on the Windows machine where IDM is installed):
 > idm --server                                              # 127.0.0.1:8899, no token (loopback only)
 > idm --server --host 0.0.0.0 --port 8899 --token SECRET    # token is REQUIRED for non-loopback host
 > idm --server -v                                           # log every request and job
+> idm --server --no-webui --no-watcher                      # API only, no web page, no completion tracking
 ```
 
-Send links to the agent from the command line:
+Send links to the agent from the command line (works on any OS):
 
 ```bash
 > idm -A http://192.168.1.10:8899 --agent-token SECRET "http://test.com/test.exe" -r "http://test.com" -a
 > idm -A 127.0.0.1:8899 links.txt          # text file, one link per line ('#' = comment)
 > idm -A 127.0.0.1:8899 c                  # link(s) from clipboard
+> idm -A 127.0.0.1:8899 -w "http://test.com/big.iso"   # wait until the download is complete (exit code 0), or failed (2)
 ```
 
 Or with HTTP/JSON (`Content-Type: application/json` is required, token via `X-Token` or `Authorization: Bearer`):
@@ -240,15 +311,67 @@ curl -X POST http://127.0.0.1:8899/send -H "Content-Type: application/json" -H "
      -d "{\"urls\": [\"http://test.com/test.exe\"], \"referrer\": \"http://test.com\"}"
 ```
 
+### Web interface
+
+Open `http://HOST:8899/` in a browser. It is a single embedded page (no external files, no CDN):
+
+- paste one or more links, optional referrer / save path / "add only", press **Send to IDM**;
+- table of the jobs sent through this agent with their live state, downloaded bytes, speed and save-as name;
+- table of **all** IDM downloads found in IDM's log files (including ones you started in IDM itself);
+- token field (kept in `sessionStorage`) when the agent runs with `--token`;
+- refreshes every 2 seconds; disable with `--no-webui`.
+
+The page itself is public (it contains no data); everything it shows comes from the API, which needs the token if one is set.
+
+### Download completion tracking
+
+COM (`SendLinkToIDM2`) only **hands a link over** to IDM, it never reports back. So "was the link accepted" and "did the download finish" are two different questions:
+
+| Field | Answers | Source |
+| --- | --- | --- |
+| `status` | was the link handed to IDM? `queued`, `running`, `done`, `failed` | COM call result |
+| `state` | what is IDM doing with it? `sent`, `added`, `downloading`, `connecting`, `finishing`, `complete`, `error`, `cancelled` | IDM log files |
+
+The agent runs a small watcher thread that tails IDM's log files (`%APPDATA%\IDM\DwnlData\<USERNAME>\*.log`, override with `[watcher] log_dir` or `--log-dir`), recognises the progress lines (`Url`, `to file`, `time .., speed .., downl ..`, `Download complete.`, `Rebuilding complete`, `Connecting...`, `Cancel by user.`, ...) and matches each log to a job by URL. Only logs touched in the last 5 minutes are read when the agent starts, so old history does not show up.
+
+```mermaid
+stateDiagram-v2
+    [*] --> sent: link handed to IDM
+    sent --> added: log "Adding file"
+    added --> downloading: log "time, speed, downl"
+    sent --> downloading
+    downloading --> connecting: log "Connecting..."
+    connecting --> downloading
+    downloading --> finishing: Rename / Deleting temp
+    finishing --> complete: "Download complete." / "Rebuilding complete"
+    downloading --> complete
+    downloading --> cancelled: "Cancel by user."
+    downloading --> error: "last chunk. End rebuilding." without complete
+    cancelled --> downloading: resumed in IDM
+    error --> downloading: retried
+    complete --> [*]
+```
+
+[![Architecture 9](https://i.ibb.co/zV6bythZ/pyidm-architecture14.jpg)](https://i.ibb.co/zV6bythZ/pyidm-architecture14.jpg)
+
+Notes:
+
+- `-a` / `add_only` jobs stay `added` until you start them in IDM.
+- `complete` is final immediately. `error` and `cancelled` are treated as final by `--wait` only after they stayed unchanged for 10 seconds, because IDM writes some of those lines during normal retries.
+- If the log directory does not exist (IDM not run yet, other user, `--no-watcher`) the agent still works; `state` stays `sent` and `/health` reports `"watcher": false`. `idm -w` then returns right after sending and says that completion cannot be tracked.
+- Log line patterns come from IDM's log format as observed on current IDM versions; if a future IDM changes the wording the state stays at its last known value.
+
 ### HTTP API
 
 | Endpoint | Auth | Description |
 | --- | --- | --- |
+| `GET /` (`/ui`) | no | web interface |
 | `POST /send` | yes | send link(s) to IDM (start download unless `add_only: true`) |
 | `POST /add` | yes | add link(s) to IDM queue without starting (forces `add_only`) |
-| `GET /jobs` | yes | list recent jobs, newest first |
-| `GET /jobs/<id>` | yes | status of one job |
-| `GET /health` | no | liveness check: `{"status":"ok","version":"...","pending":0}` |
+| `GET /jobs` | yes | jobs sent through this agent, newest first |
+| `GET /jobs/<id>` | yes | one job |
+| `GET /downloads` | yes | every download seen in IDM's log files |
+| `GET /health` | no | `{"status":"ok","version":"...","pending":0,"watcher":true}` |
 
 Request body (JSON object):
 
@@ -272,14 +395,15 @@ Responses:
 ```
 
 ```json
-{"jobs": [{"id": "3701fe02acc4", "url": "http://test.com/y", "status": "failed", "error": "...", "time": 1792912521.6}]}
+{"id": "a1a8d016346c", "url": "http://test.com/test.exe", "status": "done", "state": "downloading", "error": null, "time": 1792912521.6,
+ "download": {"state": "downloading", "speed": 3000, "downloaded": 15000, "saveas": "C:\\DL\\test.exe", "log": "1234.log", "updated": 1792912530.1}}
 ```
 
 | Status | Meaning |
 | --- | --- |
 | `202` | accepted and queued |
 | `400` | invalid JSON, invalid url/field |
-| `401` | missing/wrong token (or browser/foreign Host request without token) |
+| `401` | missing/wrong token (or cross-site / foreign Host request without token) |
 | `404` | unknown endpoint or job id |
 | `411` / `413` | no `Content-Length` / body larger than 1 MB |
 | `415` | `Content-Type` is not `application/json` |
@@ -289,32 +413,49 @@ Responses:
 ```mermaid
 stateDiagram-v2
     [*] --> queued: POST /send or /add
-    queued --> running: worker picks job
+    queued --> running: COM worker picks job
     running --> done: IDM accepted link
     running --> failed: COM error / IDM not installed
-    done --> [*]
+    done --> tracking: log watcher finds the download
+    tracking --> [*]: complete / error / cancelled
     failed --> [*]
 ```
 
-Only the last 200 jobs are kept in memory; history is cleared when the agent stops.
+Only the last 200 jobs are kept in memory; history is cleared when the agent stops. `GET /downloads` is rebuilt from IDM's logs, so it survives agent restarts (within the 5 minute start window).
 
-[![Architecture 4](https://i.ibb.co/chZVTCVC/pyidm-architecture4.jpg)](https://i.ibb.co/chZVTCVC/pyidm-architecture4.jpg)
+[![Architecture 4](https://i.ibb.co/PsJBsHMq/pyidm-architecture10.jpg)](https://i.ibb.co/PsJBsHMq/pyidm-architecture10.jpg)
+
+### FAQ: what is the queue for?
+
+**Is the queue only for scheduling downloads?** No. The agent queue only serialises *sending links to IDM*: COM objects are bound to one thread, so every request is queued and the COM worker hands the links to IDM one at a time. It does not delay, order or throttle the downloads themselves. Once IDM has the link it downloads immediately (or waits in IDM's own queue with `add_only`).
+
+| You want | Use |
+| --- | --- |
+| download now | `POST /send` (default) |
+| put it in IDM's main queue, start later | `add_only: true` / `POST /add` / `idm -a` |
+| time-based scheduling | IDM's own *Scheduler* (Downloads > Scheduler); add the links with `add_only`, then schedule the queue in IDM |
 
 ### Python API
 
 ```python
-from idm import IDMan, AgentServer, agent_send
+from idm import IDMan, AgentServer, agent_send, LogWatcher
 
-# client
+# client (any OS)
 res = agent_send("192.168.1.10:8899",
                  ["http://test.com/a.exe", "http://test.com/b.exe"],
                  {"referrer": "http://test.com", "add_only": True},
                  token="SECRET")
 print(res)   # {'queued': 2, 'jobs': [...]}
 
+# track completion locally (Windows)
+w = LogWatcher()
+w.start()
+state = w.wait_final("http://test.com/a.exe", since=0)
+print(state["state"])   # complete / error / cancelled
+
 # embed the agent in your own program (blocks until Ctrl+C)
 AgentServer(IDMan(), host="127.0.0.1", port=8899, token=None,
-            defaults={"path": r"C:\DOWNLOADS"}).serve()
+            defaults={"path": r"C:\DOWNLOADS"}, watcher=LogWatcher()).serve()
 ```
 
 `agent_send` raises `idm.AgentError` when the agent is unreachable or replies with an error.
@@ -330,7 +471,10 @@ Config file is `idm.ini` inside the package (change with `idm --config section:o
 | `[data]` | `user_agent` | default User-Agent |
 | `[debug]` | `verbose` | print "Link sent to IDM successfully." |
 | `[server]` | `host`, `port`, `token` | defaults for `idm --server` (`127.0.0.1`, `8899`, none) |
+| `[server]` | `no_webui` | `1` = disable the web interface (same as `--no-webui`) |
 | `[agent]` | `url`, `token` | when `url` is set the CLI always sends to the agent; use `--local` to force local IDM |
+| `[watcher]` | `log_dir` | IDM log directory (default `%APPDATA%\IDM\DwnlData\<USERNAME>`) |
+| `[watcher]` | `disable` | `1` = no completion tracking (same as `--no-watcher`) |
 
 Precedence: command line option, then environment `PYIDM_TOKEN` (token only), then `idm.ini`, then built-in default.
 
@@ -345,8 +489,9 @@ Example:
 ### Security
 
 - The agent listens on `127.0.0.1` by default. Binding to any other host is refused unless a token is set.
-- Without a token (loopback only) requests that carry an `Origin` header or a non-loopback `Host` header are rejected, so a web page cannot trigger downloads (CSRF / DNS rebinding). `Content-Type: application/json` is mandatory and no CORS headers are sent.
-- With a token every endpoint except `/health` requires it (constant-time comparison). Browser extensions with host permission can call the agent; normal web pages cannot (no CORS).
+- Without a token (loopback only) requests with a non-loopback `Host` header are rejected (DNS rebinding), and a request carrying an `Origin` header is accepted only when it is the agent's own origin (the built-in web page). A page on any other site cannot trigger downloads. `Content-Type: application/json` is mandatory for POST and no CORS headers are sent.
+- With a token every endpoint except `/health` and the static page requires it (constant-time comparison).
+- The web page is served with a strict Content-Security-Policy, `X-Frame-Options: DENY` and renders all data with `textContent` only.
 - Traffic is plain HTTP. For access outside a trusted LAN put it behind a VPN or a TLS reverse proxy.
 - `path` is a path on the agent machine; anyone holding the token can make the agent save files anywhere IDM can write.
 - Credentials sent in `username`/`password`/`cookie` travel in the request body, protect the transport accordingly.
@@ -357,24 +502,27 @@ Example:
 schtasks /Create /SC ONLOGON /TN "pyidm-agent" /TR "idm --server --host 0.0.0.0 --token SECRET" /RL LIMITED
 ```
 
-Remove with `schtasks /Delete /TN "pyidm-agent" /F`. The agent must run in the same logged-in user session as IDM.
+Remove with `schtasks /Delete /TN "pyidm-agent" /F`. The agent must run in the same logged-in user session as IDM (the IDM log directory is per user).
 
 ### Troubleshooting
 
 | Problem | Fix |
 | --- | --- |
+| `Local IDM (COM) is only available on Windows` | you are not on Windows: use `idm -A http://HOST:8899 URL` |
+| `COM support is not installed` | `pip install comtypes pywin32` (agent-only install on Windows) |
 | `Cannot reach agent server` | agent not running, wrong host/port, or firewall (allow the port in Windows Firewall) |
-| `HTTP 401: unauthorized` | token mismatch; pass `--agent-token`/`PYIDM_TOKEN`, or you are calling from a browser page |
+| `HTTP 401: unauthorized` | token mismatch; pass `--agent-token`/`PYIDM_TOKEN`, or the request came from another site / Host |
 | `Refusing to listen on ... without a token` | add `--token` when using a non-loopback `--host` |
 | `HTTP 415` | add `Content-Type: application/json` |
 | job `failed` with COM error | IDM not installed/running in the same session, check `idm --server -v` output |
+| `state` stays `sent` | log watcher off (`"watcher": false` in `/health`): check `[watcher] log_dir` / `--log-dir`, run the agent as the same Windows user as IDM |
 | `Address already in use` | another process uses the port, choose `--port` |
 
 ## Support
 
 - Python 3.7+
-- Windows (only), for Linux you can use `pywget` (pip install [pywget](https://github.com/cumulus13/pywget)) or [wgetpanel](https://github.com/cumulus13/wgetpanel)
-- The agent *client* (`idm -A`, `agent_send`) only needs HTTP access to the agent, but the `idm` package itself currently imports Windows-only modules.
+- Agent server / local IDM: Windows only (IDM, `comtypes`, `pywin32`)
+- Agent client (`idm -A`, `agent_send`, web interface): any OS; for plain downloading on Linux you can also use `pywget` (pip install [pywget](https://github.com/cumulus13/pywget)) or [wgetpanel](https://github.com/cumulus13/wgetpanel)
 
 ## Tips
 

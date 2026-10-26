@@ -24,10 +24,14 @@ from pathlib import Path
 from make_colors import make_colors  # type: ignore
 import signal
 
+import time
+
 try:
-    from .server import AgentServer, AgentError, send as agent_send, DEFAULT_HOST, DEFAULT_PORT
+    from .server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT
+    from .watcher import LogWatcher, is_final
 except ImportError:
-    from server import AgentServer, AgentError, send as agent_send, DEFAULT_HOST, DEFAULT_PORT
+    from server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT
+    from watcher import LogWatcher, is_final
 
 if str(os.getenv('DEBUG', "0")).lower() in ("1", "true", "ok", "yes", "on"):
     try:
@@ -45,14 +49,22 @@ class IDMNotFound(Exception):
 class OSNotSupport(Exception):
     pass
 
-if not 'linux' in sys.platform:
-    import comtypes.client as cc
-    import comtypes
-    from comtypes import automation, windll
-    from ctypes import wintypes, create_unicode_buffer
-
+# COM (local IDM) exists on Windows only. Everywhere else this module still imports fine and
+# the CLI works as an agent client:  idm -A http://HOST:8899 URL
+IS_WINDOWS = sys.platform == 'win32'
+COM_ERROR = None
+cc = comtypes = automation = windll = wintypes = create_unicode_buffer = None
+if IS_WINDOWS:
+    try:
+        import comtypes.client as cc
+        import comtypes
+        from comtypes import automation, windll
+        from ctypes import wintypes, create_unicode_buffer
+    except ImportError as _e:
+        COM_ERROR = "COM support is not installed ({}). Run: pip install comtypes pywin32".format(_e)
 else:
-    raise OSNotSupport(make_colors('This only for Windows OS !'))
+    COM_ERROR = ("Local IDM (COM) is only available on Windows (this is '{}'). "
+                 "Send links to an agent server instead: idm -A http://HOST:8899 URL".format(sys.platform))
 
 
 class IDMan(object):
@@ -63,12 +75,19 @@ class IDMan(object):
     
     def __init__(self):
         super(IDMan, self)
-        self.tlb = r'c:\Program Files\Internet Download Manager\idmantypeinfo.tlb'
-        if not os.path.isfile(self.tlb):
-            self.tlb = r'c:\Program Files (x86)\Internet Download Manager\idmantypeinfo.tlb'
-        if not os.path.isfile(self.tlb):
-            #print("It seem IDM not installed, please install first !")
-            #sys.exit("It seem IDM not installed, please install first !")
+        self.tlb = None
+        if IS_WINDOWS:
+            self.tlb = r'c:\Program Files\Internet Download Manager\idmantypeinfo.tlb'
+            if not os.path.isfile(self.tlb):
+                self.tlb = r'c:\Program Files (x86)\Internet Download Manager\idmantypeinfo.tlb'
+            if not os.path.isfile(self.tlb):
+                self.tlb = None
+
+    def _require_com(self):
+        """Raise unless local IDM (COM) can be used. Agent client mode never needs this."""
+        if COM_ERROR:
+            raise OSNotSupport(make_colors(COM_ERROR, 'lw', 'r'))
+        if not self.tlb:
             raise IDMNotFound(make_colors("It seem IDM (Internet Download Manager) not installed, please install first !", 'lw', 'r'))
 
     def get_from_clipboard(self):
@@ -87,6 +106,7 @@ class IDMan(object):
 
     def download(self, link, path_to_save=None, output=None, referrer=None, cookie=None, postData=None, user=None, password=None, confirm=False, user_agent=None, add_only=False, clip=False):
         
+        self._require_com()
         lflag = 5
         
         if clip or link == 'c':
@@ -149,6 +169,14 @@ class IDMan(object):
             return default
         return val
 
+    def _flag(self, name):
+        """True only for an explicit truthy config value (empty/unset = False)."""
+        try:
+            val = self.CONFIG.get_config(name)
+        except Exception:
+            return False
+        return bool(val) and str(val).strip().lower() not in ('0', 'false', 'no', 'off')
+
     def expand_urls(self, urls):
         """'c' -> clipboard content, existing file -> one link per line, otherwise as is."""
         out = []
@@ -167,7 +195,11 @@ class IDMan(object):
                     out.append(line)
         return out
 
-    def serve(self, host=None, port=None, token=None, verbose=False):
+    def serve(self, host=None, port=None, token=None, verbose=False, webui=True, watcher=True, log_dir=None):
+        try:
+            self._require_com()
+        except (OSNotSupport, IDMNotFound) as e:
+            sys.exit(str(e))
         host = host or self._cfg('SERVER_HOST') or DEFAULT_HOST
         try:
             port = int(port or self._cfg('SERVER_PORT') or DEFAULT_PORT)
@@ -179,22 +211,62 @@ class IDMan(object):
             'confirm': True if self._cfg('DOWNLOAD_CONFIRM') else None,
             'user_agent': self._cfg('DATA_USER_AGENT'),
         }
+        log_watcher = None
+        if watcher and not self._flag('WATCHER_DISABLE'):
+            log_watcher = LogWatcher(log_dir=log_dir or self._cfg('WATCHER_LOG_DIR'))
+            if not log_watcher.start():
+                print(make_colors("IDM log directory not found ({}): download completion tracking is off".format(
+                    log_watcher.log_dir or 'unknown'), 'ly'))
+                log_watcher = None
+        webui = webui and not self._flag('SERVER_NO_WEBUI')
         try:
-            srv = AgentServer(self, host, port, token, defaults=defaults, verbose=verbose)
+            srv = AgentServer(self, host, port, token, defaults=defaults, verbose=verbose, watcher=log_watcher, webui=webui)
         except ValueError as e:
             sys.exit(make_colors(str(e), 'lw', 'r'))
         print(make_colors("pyidm agent server listening on http://%s:%s (%s) - Ctrl+C to stop" % (
             host, port, "token required" if token else "no token, loopback only"), 'b', 'y'))
-        srv.serve()
+        print(make_colors("web ui: %s | completion tracking: %s" % (
+            "/" if webui else "off", "on" if log_watcher else "off"), 'lc'))
+        try:
+            srv.serve()
+        finally:
+            if log_watcher:
+                log_watcher.stop()
 
     def send_to_agent(self, agent, urls, token=None, **opts):
         try:
             res = agent_send(agent, urls, opts, token)
         except AgentError as e:
             print(make_colors(str(e), 'lw', 'r'))
-            return False
+            return None
         print(make_colors("Sent {} link(s) to agent {}".format(res.get('queued', len(urls)), agent), 'b', 'y'))
-        return True
+        return res
+
+    @staticmethod
+    def _show_state(url, state, downloaded=None):
+        print(make_colors("[{}] {}{}".format(state, url, " ({} bytes)".format(downloaded) if downloaded else ""), 'lc'))
+
+    def wait_agent(self, agent, job_ids, token=None, timeout=3600):
+        """Wait until the agent reports every job final. Returns a process exit code."""
+        def show(view):
+            self._show_state(view['url'], view['state'], (view.get('download') or {}).get('downloaded'))
+        try:
+            final, tracked = agent_wait(agent, job_ids, token, timeout, on_change=show)
+        except AgentError as e:
+            print(make_colors(str(e), 'lw', 'r'))
+            return 2
+        if not tracked:
+            print(make_colors("Agent has no IDM log watcher: links were sent, completion cannot be tracked.", 'ly'))
+            return 0
+        return 0 if all(v['state'] == 'complete' for v in final.values()) else 2
+
+    def wait_local(self, watcher, urls, since, timeout=3600):
+        codes = []
+        for url in urls:
+            st = watcher.wait_final(url, since, timeout,
+                                    on_change=lambda s: self._show_state(s['url'], s['state'], s['downloaded']))
+            codes.append(bool(st and st['state'] == 'complete'))
+        return 0 if all(codes) else 2
 
     def docs(self):
         print(make_colors("uppercase words is VALUE NAME", 'lc'))
@@ -203,6 +275,8 @@ class IDMan(object):
         print(make_colors('download:config:1 or 0', 'lg'))
 
     def bring_to_top(self):
+        if not IS_WINDOWS or windll is None:
+            return
         user32 = windll.user32
 
         # Callback for EnumWindows
@@ -263,12 +337,19 @@ class IDMan(object):
         parse.add_argument('-A', '--agent', help='Send links to an agent server instead of local IDM, e.g. http://192.168.1.10:8899', action='store')
         parse.add_argument('--agent-token', help='Token for the agent server (or env PYIDM_TOKEN)', action='store')
         parse.add_argument('--local', help='Ignore configured agent url, send to local IDM', action='store_true')
+        parse.add_argument('-w', '--wait', help='Wait until the download is complete (needs the IDM log watcher), exit code 2 on error/cancel/timeout', action='store_true')
+        parse.add_argument('--timeout', help='Max seconds to wait with --wait (default: 3600, 0 = forever)', action='store', type=int, default=3600)
+        parse.add_argument('--no-webui', help='Agent server: disable the web interface', action='store_true')
+        parse.add_argument('--no-watcher', help='Agent server: disable IDM log watching (download state tracking)', action='store_true')
+        parse.add_argument('--log-dir', help='IDM log directory (default: %%APPDATA%%\\IDM\\DwnlData\\<USERNAME>)', action='store')
         parse.add_argument('-v', '--verbose', help='Verbose agent server log', action='store_true')
         parse.add_argument('--config',  help = 'set config, format section:option:value, for list valid section/option type "doc"', action = 'store')
         # parse.add_argument('--clip', help='Get URL from clipboard for one link', action='store_true')
 
         if len(sys.argv) ==1:
             parse.print_help()
+            if COM_ERROR:
+                print(make_colors("\nNote: " + COM_ERROR, 'ly'))
             self.bring_to_top()
         else:
             try:
@@ -292,24 +373,44 @@ class IDMan(object):
             if args.config == 'doc':
                 self.docs()
             elif args.server:
-                self.serve(args.host, args.port, args.token, args.verbose)
+                self.serve(args.host, args.port, args.token, args.verbose, not args.no_webui, not args.no_watcher, args.log_dir)
             else:
                 urls = self.expand_urls(args.URLS)
                 agent = None if args.local else (args.agent or self._cfg('AGENT_URL'))
                 if agent:
                     token = args.agent_token or os.getenv('PYIDM_TOKEN') or self._cfg('AGENT_TOKEN')
-                    if not self.send_to_agent(agent, urls, token, path=args.path, output=args.output,
-                                              referrer=args.referrer, cookie=args.cookie, post_data=args.post_data,
-                                              username=args.username, password=args.password,
-                                              confirm=True if args.confirm else None,
-                                              user_agent=args.user_agent, add_only=True if args.add else None):
+                    res = self.send_to_agent(agent, urls, token, path=args.path, output=args.output,
+                                             referrer=args.referrer, cookie=args.cookie, post_data=args.post_data,
+                                             username=args.username, password=args.password,
+                                             confirm=True if args.confirm else None,
+                                             user_agent=args.user_agent, add_only=True if args.add else None)
+                    if not res:
                         sys.exit(1)
+                    if args.wait and not args.add:
+                        sys.exit(self.wait_agent(agent, res.get('jobs', []), token, args.timeout))
                 else:
+                    try:
+                        self._require_com()
+                    except (OSNotSupport, IDMNotFound) as e:
+                        print(str(e))
+                        sys.exit(1)
+                    watcher = None
+                    if args.wait and not args.add:
+                        watcher = LogWatcher(log_dir=args.log_dir or self._cfg('WATCHER_LOG_DIR'))
+                        if not watcher.start():
+                            print(make_colors("IDM log directory not found ({}): cannot wait for completion".format(
+                                watcher.log_dir or 'unknown'), 'ly'))
+                            watcher = None
+                    started = time.time()
                     download_path = args.path or os.getcwd()
                     confirm = args.confirm or self.CONFIG.get_config('DOWNLOAD_CONFIRM')
                     user_agent = args.user_agent or self.CONFIG.get_config('DATA_USER_AGENT')
                     for url in urls:
                         self.download(url, download_path, args.output, args.referrer, args.cookie, args.post_data, args.username, args.password, confirm, user_agent, args.add)
+                    if watcher:
+                        code = self.wait_local(watcher, urls, started, args.timeout)
+                        watcher.stop()
+                        sys.exit(code)
 
 
 if __name__ == '__main__':

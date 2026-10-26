@@ -1,3 +1,11 @@
+#!/usr/bin/env python3
+
+# File: setup.py
+# Author: Hadi Cahyadi <cumulus13@gmail.com>
+# Date: 2026-10-26
+# Description: 
+# License: MIT
+
 import io
 from setuptools import setup, find_packages
 import shutil
