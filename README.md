@@ -16,6 +16,7 @@ Downloader with Internet Download Manager (Windows), with an HTTP **agent server
   - [Job persistence](#job-persistence)
   - [FAQ: what is the queue for?](#faq-what-is-the-queue-for)
   - [Python API](#python-api)
+  - [Polling the status](#polling-the-status)
   - [Configuration](#configuration)
   - [Security](#security)
   - [Run at Windows startup](#run-at-windows-startup)
@@ -517,6 +518,85 @@ AgentServer(IDMan(), host="127.0.0.1", port=8899, token=None,
 ```
 
 `agent_send` raises `idm.AgentError` when the agent is unreachable or replies with an error.
+
+### Polling the status
+
+A job has two fields: `status` (was the link handed to IDM) and `state` (what IDM does with it: `sent`, `added`, `downloading`, `complete`, ...), plus a `download` object with `downloaded` bytes, `speed` and `saveas` once IDM has started. Everything below works from any OS, only the standard library is used.
+
+**Python client (`AgentClient`)**
+
+```python
+from idm import AgentClient
+
+c = AgentClient("192.168.1.10:8899", token="SECRET")     # token only if the agent has one
+ids = c.send(["http://test.com/a.iso", "http://test.com/b.iso"], referrer="http://test.com")
+
+# 1. one-shot status
+print(c.state(ids[0]))                 # 'downloading'
+view = c.job(ids[0])                   # {'id', 'url', 'status', 'state', 'error', 'download': {...}}
+print(view["download"]["downloaded"], view["download"]["saveas"])
+
+# 2. live progress: a view is yielded on every change, the generator ends when all jobs are final
+for view in c.poll(ids, interval=2):
+    dl = view["download"] or {}
+    print(view["url"], view["state"], dl.get("downloaded"), dl.get("speed"))
+
+# 3. just wait for the result: {job_id: view}
+final = c.wait(ids, timeout=3600)
+failed = [v["url"] for v in final.values() if v["state"] != "complete"]
+print("all done" if not failed else f"not complete: {failed}")
+```
+
+| Method | Returns |
+| --- | --- |
+| `send(urls, **opts)` / `add(urls, **opts)` | list of job ids (`add` only adds to IDM's queue). `opts`: `path`, `output`, `referrer`, `cookie`, `post_data`, `username`, `password`, `confirm`, `user_agent`, `add_only` |
+| `job(id)` / `state(id)` | one job view / its `state` string |
+| `jobs()` / `downloads()` | jobs sent through the agent / every download seen in IDM's logs |
+| `poll(ids, interval=2, timeout=3600, grace=10)` | generator of job views on every state or progress change |
+| `wait(ids, timeout=3600, interval=2, on_change=None)` | `{job_id: view}` when all jobs are final |
+| `remove(id)` / `clear()` | remove one job / all finished jobs from the agent's list (IDM is not touched) |
+| `health()` | `{"status", "version", "pending", "watcher"}` |
+
+Final states are `complete`, `removed`, `failed`, `interrupted`, `lost`; `error` and `cancelled` count as final after they stayed unchanged for `grace` seconds (IDM logs some of those lines during normal retries). A job the agent forgot (expired, cleared) is reported once as `state: "removed"`, `status: "gone"`. `AgentError` (with `.code` = HTTP status or `None`) is raised when the agent is unreachable or refuses. If `health()["watcher"]` is false the agent cannot see IDM's logs: states stop at `sent` / `added` and `wait()` returns right after sending.
+
+**Plain functions** (same thing without a class): `agent_send`, `agent_poll`, `agent_wait`
+
+```python
+from idm import agent_send, agent_poll, agent_wait
+
+ids = agent_send("127.0.0.1:8899", ["http://test.com/a.iso"], {"add_only": False}, token=None)["jobs"]
+for view in agent_poll("127.0.0.1:8899", ids, interval=1):
+    print(view["state"])
+final, tracked = agent_wait("127.0.0.1:8899", ids, timeout=600)
+```
+
+**Without an agent (Windows, IDM on the same PC)**: poll IDM's logs directly
+
+```python
+import time
+from idm import IDMan, LogWatcher
+
+w = LogWatcher()                       # %APPDATA%\IDM\DwnlData\<USERNAME>
+w.start()
+url = "http://test.com/a.iso"
+since = time.time()
+IDMan().download(url, r"C:\DOWNLOADS")
+
+print(w.find(url, since))              # current status dict or None: state, speed, downloaded, saveas ...
+status = w.wait_final(url, since, timeout=3600, on_change=lambda s: print(s["state"], s["downloaded"]))
+print(status["state"])                 # complete / error / cancelled / removed
+w.stop()
+```
+
+**HTTP / shell**
+
+```bash
+curl -s -H "X-Token: SECRET" http://127.0.0.1:8899/jobs/JOB_ID          # one job
+# poll until finished (Linux/macOS, needs jq)
+until [ "$(curl -s -H "X-Token: SECRET" http://127.0.0.1:8899/jobs/JOB_ID | jq -r .state)" = complete ]; do sleep 2; done
+```
+
+Command line: `idm -A http://HOST:8899 -w URL` does the same and exits with 0 (complete) or 2 (anything else).
 
 ### Configuration
 

@@ -27,10 +27,10 @@ import signal
 import time
 
 try:
-    from .server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT, default_jobs_file
+    from .server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, poll_jobs as agent_poll, AgentClient, DEFAULT_HOST, DEFAULT_PORT, default_jobs_file
     from .watcher import LogWatcher, is_final
 except ImportError:
-    from server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, DEFAULT_HOST, DEFAULT_PORT, default_jobs_file
+    from server import AgentServer, AgentError, send as agent_send, wait_jobs as agent_wait, poll_jobs as agent_poll, AgentClient, DEFAULT_HOST, DEFAULT_PORT, default_jobs_file
     from watcher import LogWatcher, is_final
 
 if str(os.getenv('DEBUG', "0")).lower() in ("1", "true", "ok", "yes", "on"):

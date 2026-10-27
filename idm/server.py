@@ -67,7 +67,9 @@ BOOL_FIELDS = ('confirm', 'add_only')
 
 
 class AgentError(Exception):
-    pass
+    def __init__(self, message, code=None):
+        super(AgentError, self).__init__(message)
+        self.code = code          # HTTP status when the agent answered, None for network errors
 
 
 def _clean_url(value):
@@ -562,7 +564,7 @@ def _request(method, agent, path, payload=None, token=None, timeout=10):
             msg = json.loads(e.read().decode('utf-8')).get('error', e.reason)
         except Exception:
             msg = e.reason
-        raise AgentError('Agent server replied HTTP %s: %s' % (e.code, msg))
+        raise AgentError('Agent server replied HTTP %s: %s' % (e.code, msg), e.code)
     except (urllib.error.URLError, socket.timeout, OSError) as e:
         raise AgentError('Cannot reach agent server %s: %s' % (agent, getattr(e, 'reason', e)))
 
@@ -578,29 +580,112 @@ def get(agent, path, token=None, timeout=10):
     return _request('GET', agent, path, None, token, timeout)
 
 
-def wait_jobs(agent, ids, token=None, timeout=3600, interval=2.0, grace=10.0, on_change=None):
-    """Poll the agent until every job is final. Returns (views_by_id, tracked).
-    tracked is False when the agent has no IDM log watcher (completion cannot be known)."""
+def poll_jobs(agent, ids, token=None, timeout=3600, interval=2.0, grace=10.0):
+    """Generator: yields a job view every time its state or downloaded bytes change, and once more when the
+    job is final (complete, removed, failed, interrupted, lost; error/cancelled after `grace` s unchanged).
+    Ends when every job is final or `timeout` seconds passed (0 = no limit). A job the agent no longer
+    knows (expired / removed) is reported once as state 'removed' with status 'gone'."""
     tracked = bool(get(agent, '/health', token).get('watcher'))
     deadline = time.time() + timeout if timeout else None
-    pending, final, seen = list(ids), {}, {}
+    pending, seen = list(ids), {}
     while pending:
         for jid in list(pending):
-            view = get(agent, '/jobs/' + jid, token)
-            final[jid] = view
-            dl = view.get('download') or {}
-            sig = (view['state'], dl.get('downloaded'))
-            if seen.get(jid, (None,))[0] != sig:
-                prev = seen.get(jid)
-                seen[jid] = (sig, time.time() if (prev is None or prev[0][0] != sig[0]) else prev[1])
-                if on_change:
-                    on_change(view)
-            if not tracked and view['state'] in ('sent', 'added'):
+            try:
+                view = get(agent, '/jobs/' + jid, token)
+            except AgentError as e:
+                if e.code != 404:
+                    raise
                 pending.remove(jid)
-            elif is_final(view['state'], time.time() - seen[jid][1], grace):
+                yield {'id': jid, 'url': None, 'status': 'gone', 'state': 'removed', 'download': None,
+                       'error': 'job not found on the agent (expired or removed)', 'time': None}
+                continue
+            sig = (view['state'], (view.get('download') or {}).get('downloaded'))
+            prev = seen.get(jid)
+            changed = prev is None or prev[0] != sig
+            if changed:
+                seen[jid] = (sig, time.time() if prev is None or prev[0][0] != sig[0] else prev[1])
+            done = (not tracked and view['state'] in ('sent', 'added')) or \
+                is_final(view['state'], time.time() - seen[jid][1], grace)
+            if changed or done:
+                yield view
+            if done:
                 pending.remove(jid)
         if pending:
             if deadline and time.time() > deadline:
-                break
+                return
             time.sleep(interval)
+
+
+def wait_jobs(agent, ids, token=None, timeout=3600, interval=2.0, grace=10.0, on_change=None):
+    """Block until every job is final. Returns (views_by_id, tracked).
+    tracked is False when the agent has no IDM log watcher (completion cannot be known)."""
+    tracked = bool(get(agent, '/health', token).get('watcher'))
+    final, last = {}, {}
+    for view in poll_jobs(agent, ids, token, timeout, interval, grace):
+        final[view['id']] = view
+        sig = (view['state'], (view.get('download') or {}).get('downloaded'))
+        if last.get(view['id']) != sig:
+            last[view['id']] = sig
+            if on_change:
+                on_change(view)
     return final, tracked
+
+
+class AgentClient(object):
+    """Small client for an agent server (any OS, standard library only).
+
+        c = AgentClient("192.168.1.10:8899", token="SECRET")
+        ids = c.send(["http://test.com/a.iso"], referrer="http://test.com")
+        for view in c.poll(ids):                # live progress
+            print(view["state"], view["download"])
+    """
+
+    def __init__(self, agent, token=None, timeout=10):
+        self.agent = agent
+        self.token = token
+        self.timeout = timeout
+
+    def health(self):
+        return get(self.agent, '/health', self.token, self.timeout)
+
+    def send(self, urls, **opts):
+        """Send link(s) (str or list). Options: see FIELD_MAP. Returns the list of job ids."""
+        if isinstance(urls, str):
+            urls = [urls]
+        return send(self.agent, urls, opts, self.token, '/send', self.timeout).get('jobs', [])
+
+    def add(self, urls, **opts):
+        """Like send() but only adds to IDM's queue (does not start)."""
+        if isinstance(urls, str):
+            urls = [urls]
+        return send(self.agent, urls, opts, self.token, '/add', self.timeout).get('jobs', [])
+
+    def job(self, job_id):
+        """Current view of one job: {'id', 'url', 'status', 'state', 'error', 'download': {...} | None}."""
+        return get(self.agent, '/jobs/' + job_id, self.token, self.timeout)
+
+    def state(self, job_id):
+        return self.job(job_id)['state']
+
+    def jobs(self):
+        return get(self.agent, '/jobs', self.token, self.timeout)['jobs']
+
+    def downloads(self):
+        """Every download the agent sees in IDM's log files (also ones not sent through the agent)."""
+        return get(self.agent, '/downloads', self.token, self.timeout)['downloads']
+
+    def remove(self, job_id):
+        """Remove a job from the agent's list (IDM is not touched)."""
+        return _request('DELETE', self.agent, '/jobs/' + job_id, None, self.token, self.timeout)
+
+    def clear(self):
+        """Remove all finished jobs from the agent's list. Returns how many."""
+        return _request('POST', self.agent, '/jobs/clear', {}, self.token, self.timeout).get('cleared', 0)
+
+    def poll(self, job_ids, interval=2.0, timeout=3600, grace=10.0):
+        """Generator of job views on every change until all jobs are final. See poll_jobs()."""
+        return poll_jobs(self.agent, job_ids, self.token, timeout, interval, grace)
+
+    def wait(self, job_ids, timeout=3600, interval=2.0, on_change=None):
+        """Block until all jobs are final. Returns {job_id: view}."""
+        return wait_jobs(self.agent, job_ids, self.token, timeout, interval, on_change=on_change)[0]
