@@ -2,7 +2,7 @@
 
 INDEX_HTML = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>pyidm agent</title>
+<title>PyIDM WebUI (agent)</title>
 <style>
 :root{color-scheme:light dark;--bg:#fff;--fg:#1c1f23;--mut:#6b7280;--line:#d8dce2;--acc:#2563eb;--ok:#16a34a;--bad:#dc2626;--warn:#d97706}
 @media(prefers-color-scheme:dark){:root{--bg:#14171a;--fg:#e6e8eb;--mut:#9aa3ad;--line:#2b3138;--acc:#60a5fa;--ok:#4ade80;--bad:#f87171;--warn:#fbbf24}}
