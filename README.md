@@ -253,7 +253,7 @@ flowchart LR
     LOGS -->|"read"| LW
 ```
 
-[![Architecture 2](https://i.ibb.co/JjqW6JQ3/pyidm-architecture18.jpg)](https://i.ibb.co/JjqW6JQ3/pyidm-architecture18.jpg)
+[![Architecture 2](https://raw.githubusercontent.com/licface15/images/refs/heads/main/pyidm/pyidm_architecture18.jpg)](https://raw.githubusercontent.com/licface15/images/refs/heads/main/pyidm/pyidm_architecture18.jpg)
 
 Request flow, including completion tracking:
 
@@ -287,7 +287,7 @@ sequenceDiagram
     HTTP-->>Client: {state: complete}
 ```
 
-[![Architecture 3](https://i.ibb.co/G3k5sn0G/pyidm-architecture8.jpg)](https://i.ibb.co/G3k5sn0G/pyidm-architecture8.jpg)
+[![Architecture 3](https://raw.githubusercontent.com/licface15/images/refs/heads/main/pyidm/pyidm_architecture8.jpg)](https://raw.githubusercontent.com/licface15/images/refs/heads/main/pyidm/pyidm_architecture8.jpg)
 
 ### Quick start
 
@@ -448,7 +448,7 @@ stateDiagram-v2
 
 Only the last 200 jobs are kept and finished ones expire after `job_ttl`. The list survives restarts, see [Job persistence](#job-persistence). `GET /downloads` is rebuilt from IDM's logs, so it survives agent restarts (within the 5 minute start window).
 
-[![Architecture 4](https://i.ibb.co/PsJBsHMq/pyidm-architecture10.jpg)](https://i.ibb.co/PsJBsHMq/pyidm-architecture10.jpg)
+[![Architecture 4](https://raw.githubusercontent.com/licface15/images/refs/heads/main/pyidm/pyidm_architecture10.jpg)](https://raw.githubusercontent.com/licface15/images/refs/heads/main/pyidm/pyidm_architecture10.jpg)
 
 ### Job persistence
 
